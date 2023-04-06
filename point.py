@@ -1,6 +1,8 @@
 import pygame
 import random
 
+from config import *
+
 
 class Point(pygame.sprite.Sprite):
     def __init__(self, color, width, height):
@@ -13,13 +15,10 @@ class Point(pygame.sprite.Sprite):
         )
         self.rect = self.image.get_rect()
 
-    def update(self):
-        pass
-
     def new_position(self):
-        screen_size = pygame.display.get_window_size()
-        self.rect.center = (
-            random.randint(0, screen_size[0]),
-            random.randint(0, screen_size[1])
+        position = pygame.Vector2(
+            random.randint(0, CELL_NUMBER - 1),
+            random.randint(0, CELL_NUMBER - 1),
         )
-
+        new_position = position * CELL_SIZE
+        self.rect.center = new_position

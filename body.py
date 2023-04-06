@@ -13,35 +13,37 @@ class Body(pygame.sprite.Sprite):
         self.direction = pygame.Vector2(1, 0)
         self.direction_v = 'left'
         self.position = position
-        self.speed = 0.5
 
         self.image = pygame.Surface([width, height])
+        # Body
         pygame.draw.rect(self.image,
                          color,
                          pygame.Rect(0, 0, width, height))
+        # Border
+        pygame.draw.rect(self.image,
+                         (0, 0, 255),
+                         pygame.Rect(0, 0, width, height), 1)
         self.rect = self.image.get_rect()
-        self.rect.center = (self.position * CELL_SIZE) + (self.position * SNAKE_OFFSET)
+        self.rect.center = self.position * CELL_SIZE
 
     def update(self, movement_coordinates):
         self._change_direction(movement_coordinates)
-
         self._move()
-        if self._collides_wall():
+        if self._wall_collide():
             sys.exit(0)
 
     def on_event(self, event):
         if self.head:
             return self._handle_movement(event)
 
-    def _collides_wall(self):
-        window_size = pygame.display.get_window_size()
-        if self.rect.bottom > window_size[1]:
+    def _wall_collide(self):
+        if self.rect.bottom > SCREEN_SIZE[1]:
             return True
         elif self.rect.top < 0:
             return True
         elif self.rect.left < 0:
             return True
-        elif self.rect.right > window_size[0]:
+        elif self.rect.right > SCREEN_SIZE[0]:
             return True
         else:
             return False
@@ -59,7 +61,7 @@ class Body(pygame.sprite.Sprite):
 
     def _move(self):
         self.position += self.direction
-        self.rect.center = (self.position * CELL_SIZE + self.position * SNAKE_OFFSET)
+        self.rect.center = self.position * CELL_SIZE
 
     def _change_direction(self, movement_coordinates):
         for movement in movement_coordinates:

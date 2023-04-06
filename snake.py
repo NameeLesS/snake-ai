@@ -1,5 +1,4 @@
 import pygame
-from pygame.locals import *
 
 from body import Body
 import sys
@@ -28,7 +27,7 @@ class Snake:
     def draw(self, surface):
         self.snake_group.draw(surface)
 
-    def add_body(self):
+    def extend_body(self):
         last_snake = self.snake_group.sprites()[-1]
         l_position, l_direction = last_snake.position, last_snake.direction
         n_position = l_position - l_direction
