@@ -1,4 +1,5 @@
 import pygame
+import numpy as np
 from pygame.locals import *
 
 from snake import Snake
@@ -81,3 +82,7 @@ class Game:
 if __name__ == '__main__':
     game = Game(SCREEN_SIZE, FPS)
     game.execute()
+
+
+# np.array(self._display_surf.get_buffer())
+# pygame.surfarray.array3d(self._display_surf)
