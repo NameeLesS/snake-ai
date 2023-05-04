@@ -13,11 +13,13 @@ class Snake:
         self.head._owner = self
         self.snake_group.add(self.head)
         self.movement_coordinates = []
+        self.collides = False
 
     def update(self):
         self.snake_group.update(self.movement_coordinates)
         self._clear_movement_coordinates()
         self._self_bite()
+        self._wall_collide()
 
     def on_event(self, event):
         movement = self.head.on_event(event)
@@ -44,7 +46,12 @@ class Snake:
     def _self_bite(self):
         for sprite in self.snake_group.sprites():
             if pygame.sprite.collide_rect(self.head, sprite) and self.head is not sprite:
-                sys.exit()
+                self.collides = True
+
+    def _wall_collide(self):
+        for body in self.snake_group:
+            if body.collides:
+                self.collides = True
 
     def update_coordinates(self, coordinates, body):
         last_snake = self.snake_group.sprites()[-1]

@@ -13,6 +13,7 @@ class Body(pygame.sprite.Sprite):
         self.direction = pygame.Vector2(1, 0)
         self.direction_v = 'left'
         self.position = position
+        self.collides = False
 
         self.image = pygame.Surface([width, height])
         # Body
@@ -30,7 +31,7 @@ class Body(pygame.sprite.Sprite):
         self._change_direction(movement_coordinates)
         self._move()
         if self._wall_collide():
-            sys.exit(0)
+            self.collides = True
 
     def on_event(self, event):
         if self.head:

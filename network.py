@@ -48,4 +48,10 @@ class Memory:
 
 Transition = namedtuple('Transition', ('state', 'n_state', 'action', 'reward'))
 
+# Step function should return:
+# - current state
+# - next state
+# - reward
+# enviroment should contain informations about:
+# - Possible actions
 
