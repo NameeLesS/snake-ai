@@ -97,12 +97,11 @@ class GameEnviroment(Game):
 
     def step(self, action):
         score_beofre = self.score.score
-        state = self._get_state()
         self._do_action(action)
 
         super().loop()
 
-        next_state = self._get_state()
+        next_state = self.get_state()
 
         terminated = self.terminate
         if self.terminate:
@@ -115,13 +114,13 @@ class GameEnviroment(Game):
         else:
             reward = 0
 
-        return state, reward, next_state, terminated
+        return reward, next_state, int(terminated)
 
     def execute(self):
         if self.init() == False:
             self._running = False
 
-    def _get_state(self):
+    def get_state(self):
         return pygame.surfarray.array3d(self._display_surf)
 
     def _do_action(self, action):

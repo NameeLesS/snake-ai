@@ -1,9 +1,11 @@
 import torch
+import numpy as np
 import random
 from torch import nn
 from collections import deque, namedtuple
 
 from game import GameEnviroment
+from config import *
 
 
 class DQN(nn.Module):
@@ -25,8 +27,8 @@ class DQN(nn.Module):
             nn.Flatten(),
 
             nn.Linear(in_features=131072, out_features=2048),
+            nn.ReLU(),
             nn.Linear(in_features=2048, out_features=4),
-            nn.Softmax(dim=1)
         )
 
     def forward(self, x):
@@ -48,12 +50,55 @@ class Memory:
         return len(self.memory)
 
 
-Transition = namedtuple('Transition', ('state', 'n_state', 'action', 'reward'))
+Transition = namedtuple('Transition', ('state', 'n_state', 'action', 'reward', 'terminated'))
+memory = Memory(2000)
 
-predict_network = DQN()
-target_network = DQN()
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+predict_network = DQN().to(device)
+target_network = DQN().to(device)
 possible_actions = [0, 1, 2, 3]
 
-def epsilon_greedy_policy():
-    pass
+game = GameEnviroment(SCREEN_SIZE, FPS)
+game.execute()
 
+
+def epsilon_greedy_policy(epsilon, state):
+    c = np.random.uniform(0, 1)
+    if c < 1 - epsilon:
+        return np.random.choice(possible_actions)
+    else:
+        target_network.eval()
+
+        with torch.no_grad():
+            action = target_network(state)
+
+        return int(torch.argmax(action))
+
+
+def do_one_step():
+    state = torch.tensor(game.get_state()[np.newaxis].reshape((1, 3, 800, 800)), dtype=torch.float32)
+    action = epsilon_greedy_policy(0.9, state)
+
+    reward, next_state, terminated = game.step(action)
+    next_state = torch.tensor(next_state[np.newaxis].reshape((1, 3, 800, 800)), dtype=torch.float32)
+
+    memory.push(Transition(state, next_state, action, reward, terminated))
+    return state, next_state, action, reward, terminated
+
+
+def training_step(batch_size, gamma):
+    states, next_states, actions, rewards, terminated = Transition(*zip(*memory.sample(batch_size)))
+    rewards = torch.tensor(rewards)
+    terminated = torch.tensor(terminated)
+    states = torch.stack(states).squeeze(1)
+
+    max_q_values = predict_network(states).gather(-1, torch.tensor([actions]))
+
+    q_values = rewards + (1 - terminated) * gamma * max_q_values
+
+
+for i in range(10):
+    do_one_step()
+
+training_step(1, 0.9)
