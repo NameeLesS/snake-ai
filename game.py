@@ -104,14 +104,22 @@ class GameEnviroment(Game):
 
         next_state = self._get_state()
 
+        terminated = self.terminate
+        if self.terminate:
+            self.restart()
+
         if score_beofre - self.score.score > 0:
             reward = 1
-        elif self.terminate:
+        elif terminated:
             reward = -1
         else:
             reward = 0
 
-        return state, reward, next_state, self.terminate
+        return state, reward, next_state, terminated
+
+    def execute(self):
+        if self.init() == False:
+            self._running = False
 
     def _get_state(self):
         return pygame.surfarray.array3d(self._display_surf)

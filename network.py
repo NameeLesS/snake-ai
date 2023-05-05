@@ -3,6 +3,8 @@ import random
 from torch import nn
 from collections import deque, namedtuple
 
+from game import GameEnviroment
+
 
 class DQN(nn.Module):
     def __init__(self):
@@ -48,10 +50,10 @@ class Memory:
 
 Transition = namedtuple('Transition', ('state', 'n_state', 'action', 'reward'))
 
-# Step function should return:
-# - current state
-# - next state
-# - reward
-# enviroment should contain informations about:
-# - Possible actions
+predict_network = DQN()
+target_network = DQN()
+possible_actions = [0, 1, 2, 3]
+
+def epsilon_greedy_policy():
+    pass
 
