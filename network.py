@@ -5,6 +5,7 @@ from torch import nn
 from collections import deque, namedtuple
 
 from game import GameEnviroment
+from graphs import Graphs
 from config import *
 
 
@@ -63,6 +64,7 @@ possible_actions = [0, 1, 2, 3]
 
 game = GameEnviroment(SCREEN_SIZE, FPS)
 game.execute()
+graphs = Graphs()
 
 
 def epsilon_greedy_policy(epsilon, state):
@@ -85,6 +87,7 @@ def do_one_step():
     reward, next_state, terminated = game.step(action)
     next_state = torch.tensor(next_state[np.newaxis].reshape((1, 3, 800, 800)), dtype=torch.float32)
 
+    graphs.push_reward(reward)
     memory.push(Transition(state, next_state, action, reward, terminated))
     return state, next_state, action, reward, terminated
 
@@ -110,6 +113,7 @@ def training_step(batch_size, gamma):
 
     target_network.load_state_dict(predict_network.state_dict())
 
+    graphs.push_loss(loss.item())
     print(f'Loss: {loss.item()}')
 
 
@@ -118,6 +122,8 @@ def training_loop(epochs, batch_size):
         print(f'======== {epoch + 1}/{epochs} epoch')
         do_one_step()
         training_step(batch_size, 0.9)
+        graphs.plot_rewards()
+        graphs.plot_loss()
 
 
-training_loop(10, 1)
+training_loop(30, 1)
