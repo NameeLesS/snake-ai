@@ -1,7 +1,8 @@
 import pygame
 import numpy as np
-from pygame.locals import *
+import os
 
+from pygame.locals import *
 from snake import Snake
 from point import Point
 from score import Score
@@ -94,6 +95,7 @@ class Game:
 class GameEnviroment(Game):
     def __init__(self, *args, **kwargs):
         super(GameEnviroment, self).__init__(*args, **kwargs)
+        os.environ["SDL_VIDEODRIVER"] = "dummy"
 
     def step(self, action):
         score_beofre = self.score.score

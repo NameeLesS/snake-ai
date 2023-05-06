@@ -57,6 +57,8 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 predict_network = DQN().to(device)
 target_network = DQN().to(device)
+huber_loss = nn.HuberLoss()
+optimizer = torch.optim.Adam(predict_network.parameters(), lr=0.01)
 possible_actions = [0, 1, 2, 3]
 
 game = GameEnviroment(SCREEN_SIZE, FPS)
@@ -77,7 +79,7 @@ def epsilon_greedy_policy(epsilon, state):
 
 
 def do_one_step():
-    state = torch.tensor(game.get_state()[np.newaxis].reshape((1, 3, 800, 800)), dtype=torch.float32)
+    state = torch.tensor(game.get_state()[np.newaxis].reshape((1, 3, 800, 800)), dtype=torch.float32).to(device)
     action = epsilon_greedy_policy(0.9, state)
 
     reward, next_state, terminated = game.step(action)
@@ -88,17 +90,34 @@ def do_one_step():
 
 
 def training_step(batch_size, gamma):
+    if len(memory) < batch_size:
+        return
+
     states, next_states, actions, rewards, terminated = Transition(*zip(*memory.sample(batch_size)))
-    rewards = torch.tensor(rewards)
-    terminated = torch.tensor(terminated)
-    states = torch.stack(states).squeeze(1)
+    rewards = torch.tensor(rewards).to(device)
+    terminated = torch.tensor(terminated).to(device)
+    states = torch.stack(states).squeeze(1).to(device)
 
-    max_q_values = predict_network(states).gather(-1, torch.tensor([actions]))
+    estimated_q_values = predict_network(states).max(axis=1).values
 
-    q_values = rewards + (1 - terminated) * gamma * max_q_values
+    target_q_values = rewards + (1 - terminated) * gamma * estimated_q_values
+
+    loss = huber_loss(estimated_q_values, target_q_values)
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    target_network.load_state_dict(predict_network.state_dict())
+
+    print(f'Loss: {loss.item()}')
 
 
-for i in range(10):
-    do_one_step()
+def training_loop(epochs, batch_size):
+    for epoch in range(epochs):
+        print(f'======== {epoch + 1}/{epochs} epoch')
+        do_one_step()
+        training_step(batch_size, 0.9)
 
-training_step(1, 0.9)
+
+training_loop(10, 1)
