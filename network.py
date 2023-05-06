@@ -9,12 +9,12 @@ from game import GameEnviroment
 from graphs import Graphs
 from config import *
 
-LR = 0.0001
-EPSILON = 0.8
+LR = 0.00025
+EPSILON = 0.9
 GAMMA = 0.9
-BATCH_SIZE = 2
+BATCH_SIZE = 16
 EPOCHS = 10000
-TARGET_UPDATE_FREQUENCY = 10
+TARGET_UPDATE_FREQUENCY = 100
 MEMORY_SIZE = 200
 
 
@@ -22,24 +22,23 @@ class DQN(nn.Module):
     def __init__(self):
         super().__init__()
         self.model = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=96, kernel_size=(7, 7), stride=(1, 1)),
+            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=(7, 7), stride=(1, 1)),
             nn.LeakyReLU(),
             nn.MaxPool2d(5),
 
-            nn.Conv2d(in_channels=96, out_channels=256, kernel_size=(3, 3), stride=(1, 1)),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=(3, 3), stride=(1, 1)),
             nn.LeakyReLU(),
             nn.MaxPool2d(3),
 
-            nn.Conv2d(in_channels=256, out_channels=512, kernel_size=(3, 3), stride=(1, 1)),
+            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(3, 3), stride=(1, 1)),
             nn.LeakyReLU(),
             nn.MaxPool2d(3),
 
             nn.Flatten(),
 
-            nn.Linear(in_features=25088, out_features=2048),
-            nn.BatchNorm1d(2048),
+            nn.Linear(in_features=3136, out_features=256),
             nn.LeakyReLU(),
-            nn.Linear(in_features=2048, out_features=4),
+            nn.Linear(in_features=256, out_features=4),
         )
 
     def forward(self, x):
@@ -68,7 +67,9 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 predict_network = DQN().to(device)
 target_network = DQN().to(device)
-huber_loss = nn.HuberLoss()
+target_network.load_state_dict(predict_network.state_dict())
+
+huber_loss = nn.SmoothL1Loss()
 optimizer = torch.optim.Adam(predict_network.parameters(), lr=LR)
 possible_actions = [0, 1, 2, 3]
 
@@ -85,19 +86,19 @@ def epsilon_greedy_policy(epsilon, state):
         target_network.eval()
 
         with torch.no_grad():
-            action = target_network(state)
+            action = predict_network(state)
 
         return int(torch.argmax(action))
 
 
 def do_one_step():
-    state = torch.tensor(game.get_state()[np.newaxis].reshape((1, 3, 400, 400)), dtype=torch.float32).to(device)
-    action = epsilon_greedy_policy(EPSILON, state)
+    state = torch.tensor(game.get_state()[np.newaxis].reshape((1, 3, 400, 400))).to(device)
+    action = epsilon_greedy_policy(EPSILON, state.to(torch.float32))
 
     reward, next_state, terminated = game.step(action)
-    next_state = torch.tensor(next_state[np.newaxis].reshape((1, 3, 400, 400)), dtype=torch.float32)
+    next_state = torch.tensor(next_state[np.newaxis].reshape((1, 3, 400, 400)))
 
-    graphs.push_reward(reward)
+    graphs.push_reward(reward, terminated)
     memory.push(Transition(state, next_state, action, reward, terminated))
     return state, next_state, action, reward, terminated
 
@@ -110,8 +111,8 @@ def training_step(batch_size, gamma):
     actions = torch.tensor(actions).to(device)
     rewards = torch.tensor(rewards).to(device)
     terminated = torch.tensor(terminated).to(device)
-    states = torch.stack(states).squeeze(1).to(device)
-    next_states = torch.stack(next_states).squeeze(1).to(device)
+    states = torch.stack(states).squeeze(1).to(device).to(torch.float32)
+    next_states = torch.stack(next_states).squeeze(1).to(device).to(torch.float32)
 
     mask = F.one_hot(actions, len(possible_actions))
     q_values = predict_network(states)
