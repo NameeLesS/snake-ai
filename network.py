@@ -73,7 +73,7 @@ huber_loss = nn.SmoothL1Loss()
 optimizer = torch.optim.Adam(predict_network.parameters(), lr=LR)
 possible_actions = [0, 1, 2, 3]
 
-game = GameEnviroment(SCREEN_SIZE, FPS)
+game = GameEnviroment(SCREEN_SIZE, FPS, False)
 game.execute()
 graphs = Graphs()
 

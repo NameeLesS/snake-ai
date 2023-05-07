@@ -10,11 +10,12 @@ from config import *
 
 
 class Game:
-    def __init__(self, size, fps):
+    def __init__(self, size, fps, fps_limit=True):
         self._running = True
         self._display_surf = None
         self._clock = None
         self.fps = fps
+        self.fps_limit = fps_limit
         self.size = size
         self.terminate = False
 
@@ -70,7 +71,8 @@ class Game:
         self._display_surf.fill(BACKGROUND_COLOR)
         self.render()
         pygame.display.flip()
-        self._clock.tick(self.fps)
+        if self.fps_limit:
+            self._clock.tick(self.fps)
 
     def restart(self):
         self.snake = Snake(SNAKE_BODY_COLOR,
