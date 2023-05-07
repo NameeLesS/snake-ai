@@ -143,8 +143,8 @@ def training_loop(epochs, batch_size):
             target_network.load_state_dict(predict_network.state_dict())
 
         print(graphs.get_series_reward())
-        graphs.plot_rewards()
-        graphs.plot_loss()
+        # graphs.plot_rewards()
+        # graphs.plot_loss()
 
 
 training_loop(EPOCHS, BATCH_SIZE)
