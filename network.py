@@ -9,9 +9,9 @@ from game import GameEnviroment
 from graphs import Graphs
 from config import *
 
-LR = 0.00025
-EPSILON = 0.9
-GAMMA = 0.9
+LR = 1e-4
+EPSILON = 0.7
+GAMMA = 0.99
 BATCH_SIZE = 8
 EPOCHS = 10000
 TARGET_UPDATE_FREQUENCY = 100
@@ -69,8 +69,7 @@ predict_network = DQN().to(device)
 target_network = DQN().to(device)
 target_network.load_state_dict(predict_network.state_dict())
 
-huber_loss = nn.SmoothL1Loss()
-optimizer = torch.optim.Adam(predict_network.parameters(), lr=LR)
+optimizer = torch.optim.AdamW(predict_network.parameters(), lr=LR, amsgrad=True)
 possible_actions = [0, 1, 2, 3]
 
 game = GameEnviroment(SCREEN_SIZE, FPS, False)
@@ -122,11 +121,12 @@ def training_step(batch_size, gamma):
         next_state_q_values = target_network(next_states).max(axis=1).values
         target_q_values = rewards + (1 - terminated) * gamma * next_state_q_values
 
+    huber_loss = nn.SmoothL1Loss()
     loss = huber_loss(q_values, target_q_values)
 
     optimizer.zero_grad()
     loss.backward()
-    torch.nn.utils.clip_grad_value_(predict_network.parameters(), 100)
+    # torch.nn.utils.clip_grad_value_(predict_network.parameters(), 100)
     optimizer.step()
 
     graphs.push_loss(loss.item())
