@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 
 class Graphs:
@@ -27,8 +28,14 @@ class Graphs:
         return self.reward_series
 
     def push_loss(self, loss):
+        if isinstance(loss, torch.Tensor):
+            loss = loss.detach().cpu().numpy()
         self.losses = np.append(self.losses, loss)
 
     def push_reward(self, reward, terminated):
+        if isinstance(reward, torch.Tensor):
+            reward = reward.detach().cpu().numpy()
+        if isinstance(terminated, torch.Tensor):
+            terminated = terminated.detach().cpu().numpy()
         self.rewards = np.vstack((self.rewards, np.array([reward, terminated])))
 

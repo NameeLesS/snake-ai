@@ -2,28 +2,93 @@ import random
 import torch
 import numpy as np
 
-from torch import nn
-from collections import deque, namedtuple
-
 
 class PrioritizedReplayBuffer:
-    def __init__(self, size):
-        self.memory = deque(maxlen=size)
+    def __init__(self, buffer_size, state_dim, action_dim, alpha=0.9, beta=0.9, eps=1e-2):
+        self.tree = SumTree(buffer_size)
 
-    def push(self, element):
-        self.memory.append(element)
+        self.alpha = alpha
+        self.beta = beta
+        self.max_prority = eps
+        self.eps = eps
+
+        self.states = torch.empty(buffer_size, *state_dim)
+        self.next_states = torch.empty(buffer_size, *state_dim)
+        self.rewards = torch.empty(buffer_size)
+        self.actions = torch.empty(buffer_size, action_dim)
+        self.terminated = torch.empty(buffer_size)
+
+        self.buffer_size = buffer_size
+        self.size = 0
+        self.write_idx = 0
+
+    def add(self, transition):
+        state, next_state, action, reward, terminated = transition
+
+        self.tree.add(self.max_prority, self.write_idx)
+
+        self.states[self.write_idx] = state
+        self.next_states[self.write_idx] = next_state
+        self.rewards[self.write_idx] = reward
+        self.actions[self.write_idx] = action
+        self.terminated[self.write_idx] = terminated
+
+        if self.write_idx == self.buffer_size:
+            self.write_idx = 0
+
+        if self.size < self.buffer_size:
+            self.size += 1
 
     def sample(self, batch_size):
-        return random.sample(self.memory, batch_size)
+        if batch_size > self.size:
+            return
+
+        tree_idxs = []
+        data_idxs = []
+        priorities = torch.empty(batch_size, 1)
+
+        segment_size = self.tree.sumcum / batch_size
+        for i in range(batch_size):
+            lower_bound, upper_bound = i * segment_size, (i + 1) * segment_size
+
+            tree_idx, priority, data_idx = self.tree.get(random.uniform(lower_bound, upper_bound))
+            tree_idxs.append(tree_idx)
+            data_idxs.append(data_idx)
+            priorities[i] = priority
+
+        probs = priorities / self.tree.sumcum
+
+        weights = ((1 / batch_size) * (1 / priorities)) ** self.beta
+        weights = weights / weights.max()
+
+        batch = (
+            self.states[data_idxs],
+            self.next_states[data_idxs],
+            self.actions[data_idxs],
+            self.rewards[data_idxs],
+            self.terminated[data_idxs]
+        )
+
+        return batch, weights, tree_idxs
+
+    def update_priorities(self, data_idxs, priorities):
+        if isinstance(priorities, torch.Tensor):
+            priorities = priorities.detach().cpu().numpy()
+
+        for idx, priority in zip(data_idxs, priorities):
+
+            priority = (priority + self.eps) ** self.alpha
+            self.tree.update(idx, priority)
+            self.max_prority = max(self.max_prority, priority)
 
     def __len__(self):
-        return len(self.memory)
+        return self.size
 
 
 class SumTree:
     def __init__(self, capacity):
         self.nodes = np.zeros(2 * capacity - 1)
-        self.data = np.zeros(capacity, dtype=object)
+        self.data = np.zeros(capacity, dtype=int)
         self.capacity = capacity
         self.last_idx = 0
         self.size = 0
@@ -50,7 +115,7 @@ class SumTree:
     def get(self, sumcum):
         idx = self._retrieve(0, sumcum)
         data_idx = idx - self.capacity + 1
-        return self.nodes[idx], self.data[data_idx]
+        return idx, self.nodes[idx], self.data[data_idx]
 
     def _propagate(self, idx, change):
         parent = self.parent(idx)
