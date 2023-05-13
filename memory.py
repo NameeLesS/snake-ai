@@ -4,7 +4,7 @@ import numpy as np
 
 
 class PrioritizedReplayBuffer:
-    def __init__(self, buffer_size, state_dim, action_dim, alpha=0.9, beta=0.9, eps=1e-2):
+    def __init__(self, buffer_size, state_dim, action_dim, alpha=0.9, beta=0.4, eps=1e-2):
         self.tree = SumTree(buffer_size)
 
         self.alpha = alpha
@@ -12,11 +12,11 @@ class PrioritizedReplayBuffer:
         self.max_prority = eps
         self.eps = eps
 
-        self.states = torch.empty(buffer_size, *state_dim)
-        self.next_states = torch.empty(buffer_size, *state_dim)
-        self.rewards = torch.empty(buffer_size)
-        self.actions = torch.empty(buffer_size, action_dim)
-        self.terminated = torch.empty(buffer_size)
+        self.states = torch.empty(buffer_size, *state_dim, dtype=torch.uint8)
+        self.next_states = torch.empty(buffer_size, *state_dim, dtype=torch.uint8)
+        self.rewards = torch.empty(buffer_size, dtype=torch.uint8)
+        self.actions = torch.empty(buffer_size, action_dim, dtype=torch.uint8)
+        self.terminated = torch.empty(buffer_size, dtype=torch.uint8)
 
         self.buffer_size = buffer_size
         self.size = 0
@@ -58,7 +58,7 @@ class PrioritizedReplayBuffer:
 
         probs = priorities / self.tree.sumcum
 
-        weights = ((1 / batch_size) * (1 / priorities)) ** self.beta
+        weights = ((1 / self.size) * (1 / probs)) ** self.beta
         weights = weights / weights.max()
 
         batch = (

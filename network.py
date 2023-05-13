@@ -1,21 +1,27 @@
 import torch
 import numpy as np
-import random
-import torch.nn.functional as F
 from torch import nn
-from collections import deque, namedtuple
 
 from game import GameEnviroment
 from graphs import Graphs
+from memory import PrioritizedReplayBuffer
 from config import *
 
+# General constants
+STATE_DIM = (1, 400, 400)
+
+# Training constants
 LR = 1e-4
 EPSILON = 0.7
 GAMMA = 0.99
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 EPOCHS = 10000
 TARGET_UPDATE_FREQUENCY = 100
+
+# Memory constants
 MEMORY_SIZE = 200
+ALPHA = 0.9
+BETA = 0.4
 
 
 class DQN(nn.Module):
@@ -46,25 +52,9 @@ class DQN(nn.Module):
         return x
 
 
-class Memory:
-    def __init__(self, size):
-        self.memory = deque(maxlen=size)
-
-    def push(self, element):
-        self.memory.append(element)
-
-    def sample(self, batch_size):
-        return random.sample(self.memory, batch_size)
-
-    def __len__(self):
-        return len(self.memory)
-
-
-Transition = namedtuple('Transition', ('state', 'n_state', 'action', 'reward', 'terminated'))
-memory = Memory(MEMORY_SIZE)
-
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+memory = PrioritizedReplayBuffer(buffer_size=MEMORY_SIZE, state_dim=STATE_DIM, action_dim=(1), alpha=ALPHA, beta=BETA)
 predict_network = DQN().to(device)
 target_network = DQN().to(device)
 target_network.load_state_dict(predict_network.state_dict())
@@ -87,18 +77,21 @@ def epsilon_greedy_policy(epsilon, state):
         with torch.no_grad():
             action = predict_network(state)
 
-        return int(torch.argmax(action))
+        return torch.argmax(action).to(torch.int)
 
 
 def do_one_step():
-    state = torch.tensor(game.get_state()[np.newaxis].reshape((1, 1, 400, 400))).to(device)
+    state = torch.tensor(game.get_state()).unsqueeze(1).reshape((1, *STATE_DIM)).to(device)
     action = epsilon_greedy_policy(EPSILON, state.to(torch.float32))
 
-    reward, next_state, terminated = game.step(action)
-    next_state = torch.tensor(next_state[np.newaxis].reshape((1, 1, 400, 400)))
+    reward, next_state, terminated = game.step(int(action))
+
+    reward = torch.tensor(reward).to(device)
+    terminated = torch.tensor(terminated).to(device)
+    next_state = torch.tensor(next_state).unsqueeze(1).reshape(STATE_DIM)
 
     graphs.push_reward(reward, terminated)
-    memory.push(Transition(state, next_state, action, reward, terminated))
+    memory.add((state, next_state, action, reward, terminated))
     return state, next_state, action, reward, terminated
 
 
@@ -106,27 +99,25 @@ def training_step(batch_size, gamma):
     if len(memory) < batch_size:
         return
 
-    states, next_states, actions, rewards, terminated = Transition(*zip(*memory.sample(batch_size)))
-    actions = torch.tensor(actions).to(device)
-    rewards = torch.tensor(rewards).to(device)
-    terminated = torch.tensor(terminated).to(device)
-    states = torch.stack(states).squeeze(1).to(device).to(torch.float32)
-    next_states = torch.stack(next_states).squeeze(1).to(device).to(torch.float32)
+    batch, weights, tree_idxs = memory.sample(batch_size)
+    states, next_states, actions, rewards, terminated = batch
+    states, next_states = states.to(torch.float32), next_states.to(torch.float32)
+    actions = actions.to(torch.int64)
 
-    mask = F.one_hot(actions, len(possible_actions))
-    q_values = predict_network(states)
-    q_values = torch.sum(q_values * mask, dim=1)
+    q_values = predict_network(states).gather(1, actions)
 
     with torch.no_grad():
-        next_state_q_values = target_network(next_states).max(axis=1).values
-        target_q_values = rewards + (1 - terminated) * gamma * next_state_q_values
+        next_state_q_values = target_network(next_states).max(axis=1)[0]
+    target_q_values = rewards + (1 - terminated) * gamma * next_state_q_values
 
-    huber_loss = nn.SmoothL1Loss()
-    loss = huber_loss(q_values, target_q_values)
+    criterion = nn.SmoothL1Loss()
+    loss = criterion(q_values, target_q_values.unsqueeze(1))
+
+    td_error = torch.abs(q_values.squeeze(1) - target_q_values)
+    memory.update_priorities(data_idxs=tree_idxs, priorities=td_error)
 
     optimizer.zero_grad()
     loss.backward()
-    # torch.nn.utils.clip_grad_value_(predict_network.parameters(), 100)
     optimizer.step()
 
     graphs.push_loss(loss.item())
@@ -143,8 +134,6 @@ def training_loop(epochs, batch_size):
             target_network.load_state_dict(predict_network.state_dict())
 
         print(graphs.get_series_reward())
-        # graphs.plot_rewards()
-        # graphs.plot_loss()
 
 
 training_loop(EPOCHS, BATCH_SIZE)
