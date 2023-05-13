@@ -125,7 +125,9 @@ class GameEnviroment(Game):
             self._running = False
 
     def get_state(self):
-        return pygame.surfarray.array3d(self._display_surf)
+        surface = pygame.surfarray.pixels3d(self._display_surf)
+        surface = np.dot(surface[:, :, :], [0.216, 0.587, 0.144])
+        return surface
 
     def _do_action(self, action):
         actions = {

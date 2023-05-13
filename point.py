@@ -14,11 +14,12 @@ class Point(pygame.sprite.Sprite):
             pygame.Rect(0, 0, width, height)
         )
         self.rect = self.image.get_rect()
+        self.position = pygame.Vector2(0, 0)
 
     def new_position(self):
-        position = pygame.Vector2(
+        self.position = pygame.Vector2(
             random.randint(0, CELL_NUMBER - 1),
             random.randint(0, CELL_NUMBER - 1),
         )
-        new_position = position * CELL_SIZE
+        new_position = self.position * CELL_SIZE
         self.rect.center = new_position

@@ -22,7 +22,7 @@ class DQN(nn.Module):
     def __init__(self):
         super().__init__()
         self.model = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=(7, 7), stride=(1, 1)),
+            nn.Conv2d(in_channels=1, out_channels=32, kernel_size=(7, 7), stride=(1, 1)),
             nn.LeakyReLU(),
             nn.MaxPool2d(5),
 
@@ -91,11 +91,11 @@ def epsilon_greedy_policy(epsilon, state):
 
 
 def do_one_step():
-    state = torch.tensor(game.get_state()[np.newaxis].reshape((1, 3, 400, 400))).to(device)
+    state = torch.tensor(game.get_state()[np.newaxis].reshape((1, 1, 400, 400))).to(device)
     action = epsilon_greedy_policy(EPSILON, state.to(torch.float32))
 
     reward, next_state, terminated = game.step(action)
-    next_state = torch.tensor(next_state[np.newaxis].reshape((1, 3, 400, 400)))
+    next_state = torch.tensor(next_state[np.newaxis].reshape((1, 1, 400, 400)))
 
     graphs.push_reward(reward, terminated)
     memory.push(Transition(state, next_state, action, reward, terminated))
