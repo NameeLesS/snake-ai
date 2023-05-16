@@ -11,11 +11,11 @@ from config import *
 STATE_DIM = (1, 400, 400)
 
 # Training constants
-LR = 1e-4
+LR = 1e-5
 EPSILON = 0.7
 GAMMA = 0.99
-BATCH_SIZE = 4
-EPOCHS = 10000
+BATCH_SIZE = 8
+EPOCHS = 1000
 TARGET_UPDATE_FREQUENCY = 100
 
 # Memory constants
@@ -110,14 +110,14 @@ def training_step(batch_size, gamma):
         next_state_q_values = target_network(next_states).max(axis=1)[0]
     target_q_values = rewards + (1 - terminated) * gamma * next_state_q_values
 
-    criterion = nn.SmoothL1Loss()
-    loss = criterion(q_values, target_q_values.unsqueeze(1))
-
+    huber = nn.SmoothL1Loss(reduce=lambda x: torch.mean(x * weights))
+    loss = huber(q_values, target_q_values.unsqueeze(1))
     td_error = torch.abs(q_values.squeeze(1) - target_q_values)
     memory.update_priorities(data_idxs=tree_idxs, priorities=td_error)
 
     optimizer.zero_grad()
     loss.backward()
+    torch.nn.utils.clip_grad_value_(predict_network.parameters(), 100)
     optimizer.step()
 
     graphs.push_loss(loss.item())
@@ -126,14 +126,16 @@ def training_step(batch_size, gamma):
 
 def training_loop(epochs, batch_size):
     for epoch in range(epochs):
-        print(f'======== {epoch + 1}/{epochs} epoch')
+        print(f'======== {epoch + 1}/{epochs} epoch ========')
         do_one_step()
         training_step(batch_size, GAMMA)
 
         if epoch % TARGET_UPDATE_FREQUENCY == 0:
             target_network.load_state_dict(predict_network.state_dict())
 
-        print(graphs.get_series_reward())
+        rewards = graphs.get_series_reward()
+        print(f'Episodes: {rewards["Episodes"]}, Reward: {rewards["Rewards"]}')
+        print(f'Previous game: {rewards["Last game"]}')
 
 
 training_loop(EPOCHS, BATCH_SIZE)

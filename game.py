@@ -112,7 +112,7 @@ class GameEnviroment(Game):
             self.restart()
 
         if self.score.score - score_beofre > 0:
-            reward = 20
+            reward = 5
         elif terminated:
             reward = -1
         else:
