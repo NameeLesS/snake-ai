@@ -30,9 +30,7 @@ class Graphs:
 
             return self.reward_series
         else:
-            return {'Episodes': len(self.rewards),
-                    'Rewards': np.sum(self.rewards, 0)[0],
-                    'Last game': self.reward_series[-1] if len(self.reward_series) else None}
+            return (len(self.rewards), np.sum(self.rewards, 0)[0], self.reward_series[-1] if len(self.reward_series) else None)
 
     def push_loss(self, loss):
         if isinstance(loss, torch.Tensor):
@@ -46,9 +44,9 @@ class Graphs:
             terminated = terminated.detach().cpu().numpy()
         self.rewards = np.vstack((self.rewards, np.array([reward, terminated])))
 
-    def save(self, path):
-        rewards_path = os.path.join(path, 'rewards.pkl')
-        losses_path = os.path.join(path, 'losses.pkl')
+    def save(self, path, name_reward, name_loss):
+        rewards_path = os.path.join(path, '{name_rewards}.pkl')
+        losses_path = os.path.join(path, '{name_loss}.pkl')
 
         with open(rewards_path, 'wb+') as f:
             pickle.dump(self.reward_series, f)

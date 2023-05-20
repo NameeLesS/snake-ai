@@ -3,15 +3,15 @@ import numpy as np
 from torch import nn
 
 from game import GameEnviroment
-from graphs import Graphs
 from memory import PrioritizedReplayBuffer
+from metrics import TrainMatrics
 from config import *
 
 # General constants
-STATE_DIM = (1, 400, 400)
+STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 
 # Training constants
-LR = 1e-5
+LR = 1e-4
 EPSILON = 0.7
 GAMMA = 0.99
 BATCH_SIZE = 8
@@ -42,12 +42,13 @@ class DQN(nn.Module):
 
             nn.Flatten(),
 
-            nn.Linear(in_features=3136, out_features=256),
+            nn.Linear(in_features=1600, out_features=128),
             nn.LeakyReLU(),
-            nn.Linear(in_features=256, out_features=4),
+            nn.Linear(in_features=128, out_features=4),
         )
 
     def forward(self, x):
+        x = x / 255
         x = self.model(x)
         return x
 
@@ -64,7 +65,7 @@ possible_actions = [0, 1, 2, 3]
 
 game = GameEnviroment(SCREEN_SIZE, FPS, False)
 game.execute()
-graphs = Graphs()
+metrics = TrainMatrics()
 
 
 def epsilon_greedy_policy(epsilon, state):
@@ -81,16 +82,16 @@ def epsilon_greedy_policy(epsilon, state):
 
 
 def do_one_step():
-    state = torch.tensor(game.get_state()).unsqueeze(1).reshape((1, *STATE_DIM)).to(device)
-    action = epsilon_greedy_policy(EPSILON, state.to(torch.float32))
+    state = torch.tensor(game.get_state()).unsqueeze(1).reshape((1, *STATE_DIM)).to(torch.float32).to(device)
+    action = epsilon_greedy_policy(EPSILON, state)
 
     reward, next_state, terminated = game.step(int(action))
 
-    reward = torch.tensor(reward).to(device)
-    terminated = torch.tensor(terminated).to(device)
+    reward = torch.tensor(reward)
+    terminated = torch.tensor(terminated)
     next_state = torch.tensor(next_state).unsqueeze(1).reshape(STATE_DIM)
 
-    graphs.push_reward(reward, terminated)
+    metrics.push_reward(reward, terminated)
     memory.add((state, next_state, action, reward, terminated))
     return state, next_state, action, reward, terminated
 
@@ -101,8 +102,11 @@ def training_step(batch_size, gamma):
 
     batch, weights, tree_idxs = memory.sample(batch_size)
     states, next_states, actions, rewards, terminated = batch
-    states, next_states = states.to(torch.float32), next_states.to(torch.float32)
-    actions = actions.to(torch.int64)
+    states = states.to(torch.float32).to(device)
+    next_states = next_states.to(torch.float32).to(device)
+    actions = actions.to(torch.int64).to(device)
+    rewards = rewards.to(device)
+    terminated = terminated.to(device)
 
     q_values = predict_network(states).gather(1, actions)
 
@@ -120,8 +124,7 @@ def training_step(batch_size, gamma):
     torch.nn.utils.clip_grad_value_(predict_network.parameters(), 100)
     optimizer.step()
 
-    graphs.push_loss(loss.item())
-    print(f'Loss: {loss.item()}')
+    metrics.push_loss(loss.item())
 
 
 def training_loop(epochs, batch_size):
@@ -129,13 +132,16 @@ def training_loop(epochs, batch_size):
         print(f'======== {epoch + 1}/{epochs} epoch ========')
         do_one_step()
         training_step(batch_size, GAMMA)
+        metrics.calculate()
+
+        print(f'Loss: {metrics.loss}')
+        print(f'Average rewards: {metrics.average_rewards}')
+        print(f'Average episode length: {metrics.average_episode_length}')
+        print(f'Rewards: {metrics.episode_rewards}')
+        print(f'Episode lengths: {metrics.episode_lengths}')
 
         if epoch % TARGET_UPDATE_FREQUENCY == 0:
             target_network.load_state_dict(predict_network.state_dict())
-
-        rewards = graphs.get_series_reward()
-        print(f'Episodes: {rewards["Episodes"]}, Reward: {rewards["Rewards"]}')
-        print(f'Previous game: {rewards["Last game"]}')
 
 
 training_loop(EPOCHS, BATCH_SIZE)
