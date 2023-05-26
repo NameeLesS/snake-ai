@@ -42,7 +42,7 @@ class DQN(nn.Module):
 
             nn.Flatten(),
 
-            nn.Linear(in_features=1600, out_features=128),
+            nn.Linear(in_features=1024, out_features=128),
             nn.LeakyReLU(),
             nn.Linear(in_features=128, out_features=4),
         )

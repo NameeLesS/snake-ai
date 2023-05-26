@@ -49,7 +49,7 @@ class Game:
     def render(self):
         self.snake.draw(self._display_surf)
         self.point_group.draw(self._display_surf)
-        self.score.draw(self._display_surf)
+        # self.score.draw(self._display_surf)
 
     def cleanup(self):
         pygame.quit()
