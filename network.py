@@ -12,11 +12,11 @@ STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 
 # Training constants
 LR = 1e-4
-EPSILON = 0.7
 GAMMA = 0.99
 BATCH_SIZE = 8
 EPOCHS = 1000
 TARGET_UPDATE_FREQUENCY = 100
+STEPS = 200
 
 # Memory constants
 MEMORY_SIZE = 200
@@ -73,8 +73,7 @@ metrics = TrainMatrics()
 
 
 def epsilon_greedy_policy(epsilon, state):
-    c = np.random.uniform(0, 1)
-    if c < 1 - epsilon:
+    if np.random.rand() < epsilon:
         return np.random.choice(possible_actions)
     else:
         predict_network.eval()
@@ -85,9 +84,9 @@ def epsilon_greedy_policy(epsilon, state):
         return torch.argmax(action).to(torch.int)
 
 
-def do_one_step():
+def do_one_step(epsilon):
     state = torch.tensor(game.get_state()).unsqueeze(1).reshape((1, *STATE_DIM)).to(torch.float32).to(device)
-    action = epsilon_greedy_policy(EPSILON, state)
+    action = epsilon_greedy_policy(epsilon, state)
 
     reward, next_state, terminated = game.step(int(action))
 
@@ -134,10 +133,13 @@ def training_step(batch_size, gamma):
     metrics.push_loss(loss.item())
 
 
-def training_loop(epochs, batch_size):
+def training_loop(epochs, batch_size, steps):
     for epoch in range(epochs):
         print(f'======== {epoch + 1}/{epochs} epoch ========')
-        do_one_step()
+        for step in range(steps):
+            epsilon = max(1 - epoch / epochs, 0.01)
+            do_one_step(epsilon)
+
         training_step(batch_size, GAMMA)
         metrics.calculate()
 
@@ -151,4 +153,4 @@ def training_loop(epochs, batch_size):
             target_network.load_state_dict(predict_network.state_dict())
 
 
-training_loop(EPOCHS, BATCH_SIZE)
+training_loop(EPOCHS, BATCH_SIZE, STEPS)

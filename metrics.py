@@ -24,11 +24,11 @@ class TrainMatrics:
 
     def calculate(self):
         if self.rewards[self.rewards[:, 1] == 1].any():
-            terminated_idx = int(np.where(self.rewards[:, 1] == 1)[0]) + 1
-            reward_series = self.rewards[:terminated_idx]
-            self.rewards = self.rewards[terminated_idx:]
-            self._episode_lengths.append(len(reward_series))
-            self._episode_rewards.append(np.sum(reward_series, 0)[0])
+            terminated_idxs = np.where(self.rewards[:, 1] == 1)[0] + 1
+            reward_series = np.split(self.rewards, terminated_idxs)
+            self.rewards = self.rewards[terminated_idxs[-1]:]
+            self._episode_lengths.extend(list(map(lambda series: len(series), reward_series)))
+            self._episode_rewards.extend(list(map(lambda series: np.sum(series, 0)[0], reward_series)))
 
     def save(self, path, name):
         save_path = os.path.join(path, f'{name}.pkl')
