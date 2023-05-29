@@ -25,7 +25,7 @@ class TrainMatrics:
     def calculate(self):
         if self.rewards[self.rewards[:, 1] == 1].any():
             terminated_idxs = np.where(self.rewards[:, 1] == 1)[0] + 1
-            reward_series = np.split(self.rewards, terminated_idxs)
+            reward_series = np.split(self.rewards, terminated_idxs)[:-1]
             self.rewards = self.rewards[terminated_idxs[-1]:]
             self._episode_lengths.extend(list(map(lambda series: len(series), reward_series)))
             self._episode_rewards.extend(list(map(lambda series: np.sum(series, 0)[0], reward_series)))
