@@ -16,7 +16,7 @@ GAMMA = 0.99
 BATCH_SIZE = 8
 EPOCHS = 1000
 TARGET_UPDATE_FREQUENCY = 100
-STEPS = 200
+STEPS = 5
 
 # Memory constants
 MEMORY_SIZE = 200
@@ -96,7 +96,7 @@ def do_one_step(epsilon):
 
     metrics.push_reward(reward, terminated)
     memory.add((state, next_state, action, reward, terminated))
-    return state, next_state, action, reward, terminated
+    return terminated
 
 
 def training_step(batch_size, gamma):
@@ -138,7 +138,9 @@ def training_loop(epochs, batch_size, steps):
         print(f'======== {epoch + 1}/{epochs} epoch ========')
         for step in range(steps):
             epsilon = max(1 - epoch / epochs, 0.01)
-            do_one_step(epsilon)
+            terminated = False
+            while not terminated:
+                terminated = do_one_step(epsilon)
 
         training_step(batch_size, GAMMA)
         metrics.calculate()
@@ -148,6 +150,8 @@ def training_loop(epochs, batch_size, steps):
         print(f'Average episode length: {metrics.average_episode_length}')
         print(f'Rewards: {metrics.episode_rewards}')
         print(f'Episode lengths: {metrics.episode_lengths}')
+        print(f'Highest reward: {metrics.highest_reward}')
+        print(f'Longest episode: {metrics.longest_episode}')
 
         if epoch % TARGET_UPDATE_FREQUENCY == 0:
             target_network.load_state_dict(predict_network.state_dict())
