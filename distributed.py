@@ -1,7 +1,8 @@
 import torch
 import numpy as np
+import traceback
 from torch import nn
-from multiprocessing import Process, Manager
+from multiprocessing import Process, Manager, Pipe
 
 from game import GameEnviroment
 from memory import PrioritizedReplayBuffer
@@ -15,9 +16,9 @@ STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 LR = 1e-4
 GAMMA = 0.99
 BATCH_SIZE = 8
-EPOCHS = 1000
+EPOCHS = 50
 TARGET_UPDATE_FREQUENCY = 100
-STEPS = 5
+STEPS = 50
 
 # Memory constants
 MEMORY_SIZE = 200
@@ -73,33 +74,6 @@ game.execute()
 metrics = TrainMatrics()
 
 
-def epsilon_greedy_policy(epsilon, state):
-    if np.random.rand() < epsilon:
-        return np.random.choice(possible_actions)
-    else:
-        predict_network.eval()
-
-        with torch.no_grad():
-            action = predict_network(state)
-
-        return torch.argmax(action).to(torch.int)
-
-
-def do_one_step(epsilon):
-    state = torch.tensor(game.get_state()).unsqueeze(1).reshape((1, *STATE_DIM)).to(torch.float32).to(device)
-    action = epsilon_greedy_policy(epsilon, state)
-
-    reward, next_state, terminated = game.step(int(action))
-
-    reward = torch.tensor(reward)
-    terminated = torch.tensor(terminated)
-    next_state = torch.tensor(next_state).unsqueeze(1).reshape(STATE_DIM)
-
-    metrics.push_reward(reward, terminated)
-    memory.add((state, next_state, action, reward, terminated))
-    return terminated
-
-
 def training_step(batch_size, gamma):
     if len(memory) < batch_size:
         return
@@ -134,26 +108,83 @@ def training_step(batch_size, gamma):
     metrics.push_loss(loss.item())
 
 
-def training_loop(epochs, batch_size, steps):
+def training_loop(epochs, batch_size, network, data_receiver, terminated):
     for epoch in range(epochs):
         print(f'======== {epoch + 1}/{epochs} epoch ========')
-        for step in range(steps):
-            epsilon = max(1 - epoch / epochs, 0.01)
-            terminated = False
-            while not terminated:
-                terminated = do_one_step(epsilon)
-
         training_step(batch_size, GAMMA)
         metrics.calculate()
 
         print(f'Loss: {metrics.loss}')
-        print(f'Average rewards: {metrics.average_rewards}')
-        print(f'Average episode length: {metrics.average_episode_length}')
-        print(f'Rewards: {metrics.episode_rewards}')
-        print(f'Episode lengths: {metrics.episode_lengths}')
-        print(f'Highest reward: {metrics.highest_reward}')
-        print(f'Longest episode: {metrics.longest_episode}')
 
         if epoch % TARGET_UPDATE_FREQUENCY == 0:
             target_network.load_state_dict(predict_network.state_dict())
 
+        for step in range(STEPS):
+            memory.add(data_receiver.recv())
+        network.clear()
+        network.update(predict_network.state_dict())
+    terminated.value = True
+
+
+class DataCollectionProcess(Process):
+    def __init__(self, network, data_sender, terminated):
+        Process.__init__(self)
+        self.network = network
+        self.data_sender = data_sender
+        self.terminated = terminated
+        self.game = GameEnviroment(SCREEN_SIZE, FPS, False)
+        self.predict_network = DQN()
+
+    def epsilon_greedy_policy(self, epsilon, state):
+        if np.random.rand() < epsilon:
+            return np.random.choice(possible_actions)
+        else:
+            self.predict_network.eval()
+
+            with torch.no_grad():
+                action = self.predict_network(state)
+
+            return torch.argmax(action).to(torch.int)
+
+    def do_one_step(self, epsilon):
+        state = torch.tensor(self.game.get_state()).unsqueeze(1).reshape((1, *STATE_DIM)).to(torch.float32).to(device)
+        action = self.epsilon_greedy_policy(epsilon, state)
+
+        reward, next_state, terminated = self.game.step(int(action))
+
+        reward = torch.tensor(reward)
+        terminated = torch.tensor(terminated)
+        next_state = torch.tensor(next_state).unsqueeze(1).reshape(STATE_DIM)
+
+        metrics.push_reward(reward, terminated)
+        data = (state, next_state, action, reward, terminated)
+        return data, terminated
+
+    def run(self):
+        try:
+            self.game.execute()
+            while True:
+                if self.terminated.value:
+                    break
+                if self.network:
+                    self.predict_network.load_state_dict(self.network)
+                data, terminated = self.do_one_step(0.1)
+                self.data_sender.send(data)
+            print('end')
+        except:
+            traceback.print_exc()
+
+
+def main():
+    with Manager() as manager:
+        network = manager.dict(predict_network.state_dict())
+        terminated = manager.Value('b', False)
+        data_recv, data_sender = Pipe()
+
+        data_collection_process = DataCollectionProcess(network, data_sender, terminated)
+        data_collection_process.start()
+        training_loop(EPOCHS, BATCH_SIZE, network, data_recv, terminated)
+
+
+if __name__ == '__main__':
+    main()
