@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from torch import nn
-from torch.multiprocessing import Process, Value, Pipe
+from torch.multiprocessing import Process, Value, Pipe, Manager
 
 from game import GameEnviroment
 from memory import PrioritizedReplayBuffer
@@ -30,19 +30,20 @@ possible_actions = [0, 1, 2, 3]
 
 
 class TrainingProcess:
-    def __init__(self, predict_network, target_network, device, network, data_updates, samples, memory_size, sample_req, terminated):
+    def __init__(self, predict_network, target_network, device, metrics, network, data_updates, samples, memory_size, sample_req, loss, terminated):
         self.predict_network = predict_network
         self.target_network = target_network
         self.device = device
+        self.metrics = metrics
         self.network = network
         self.data_updates = data_updates
         self.samples = samples
         self.memory_size = memory_size
         self.sample_req = sample_req
+        self.loss = loss
         self.terminated = terminated
 
         self.optimizer = torch.optim.AdamW(self.predict_network.parameters(), lr=LR, amsgrad=True)
-        self.metrics = TrainMatrics()
 
     def training_step(self, gamma, sample):
         self.predict_network.train()
@@ -85,18 +86,20 @@ class TrainingProcess:
 
                 tree_idxs, td_error, loss = self.training_step(gamma, sample)
 
-                print(f'Loss: {loss}')
+                print(f'Loss: {loss} Average rewards: {self.metrics["average_rewards"]} Average episode length: {self.metrics["average_episode_length"]} ')
+                print(f'Highest reward: {self.metrics["highest_reward"]} Longest episode: {self.metrics["longest_episode"]}')
 
                 if epoch % TARGET_UPDATE_FREQUENCY == 0:
                     self.target_network.load_state_dict(self.predict_network.state_dict())
 
                 self.data_updates.send({'idxs': tree_idxs, 'priorities': td_error.detach()})
+                self.loss.send(loss)
                 self.network.send(self.predict_network.state_dict())
         self.terminated.value = True
 
 
 class MemoryManagmentProcess(Process):
-    def __init__(self, data, data_updates, samples, memory_size, sample_req, terminated):
+    def __init__(self, data, metrics, data_updates, samples, memory_size, sample_req, loss, terminated):
         Process.__init__(self)
         self.memory = PrioritizedReplayBuffer(
             buffer_size=MEMORY_SIZE,
@@ -113,6 +116,8 @@ class MemoryManagmentProcess(Process):
         self.terminated = terminated
         self.memory_size = memory_size
         self.sample_req = sample_req
+        self.loss = loss
+        self.metrics_summary = metrics
 
     def update_priorities(self):
         if self.data_updates.poll():
@@ -132,7 +137,8 @@ class MemoryManagmentProcess(Process):
             self.sample_req.value = False
 
     def update_metrics(self):
-        pass
+        if self.loss.poll():
+            self.metrics.push_loss(self.loss.recv())
 
     def save_metrics(self):
         self.metrics.save('', 'metrics.pkl')
@@ -145,6 +151,12 @@ class MemoryManagmentProcess(Process):
             self.update_priorities()
             self.send_sample()
             self.update_metrics()
+            self.metrics_summary.update({
+                'average_rewards': self.metrics.average_rewards,
+                'highest_reward': self.metrics.highest_reward,
+                'average_episode_length': self.metrics.average_episode_length,
+                'longest_episode': self.metrics.longest_episode
+            })
 
             if self.terminated.value:
                 break
@@ -200,7 +212,6 @@ class DataCollectionProcess(Process):
                     epsilon = 1 * (1 - DECAY_RATE_CHANGE) ** i
                     data = self.do_one_step(epsilon)
                     self.data.send(data)
-
             i += 1
 
 
@@ -212,48 +223,55 @@ def main():
     target_network = DQN().to(device)
     target_network.load_state_dict(predict_network.state_dict())
 
-    network_recv, network_sender = Pipe()
-    data_recv, data_sender = Pipe()
-    data_updates_recv, data_updated_sender = Pipe()
-    samples_recv, samples_sender = Pipe()
-    terminated = Value('b', False)
-    memory_size = Value('i', 0)
-    sample_req = Value('b', False)
+    with Manager() as manager:
+        network_recv, network_sender = Pipe()
+        data_recv, data_sender = Pipe()
+        data_updates_recv, data_updated_sender = Pipe()
+        samples_recv, samples_sender = Pipe()
+        loss_recv, loss_sender = Pipe()
+        terminated = Value('b', False)
+        sample_req = Value('b', False)
+        memory_size = Value('i', 0)
+        metrics = manager.dict()
 
-    network_sender.send(predict_network.state_dict())
+        network_sender.send(predict_network.state_dict())
 
-    training_process = TrainingProcess(
-        predict_network=predict_network,
-        target_network=target_network,
-        device=device,
-        network=network_sender,
-        data_updates=data_updated_sender,
-        samples=samples_recv,
-        memory_size=memory_size,
-        sample_req=sample_req,
-        terminated=terminated
-    )
+        training_process = TrainingProcess(
+            predict_network=predict_network,
+            target_network=target_network,
+            device=device,
+            network=network_sender,
+            data_updates=data_updated_sender,
+            samples=samples_recv,
+            memory_size=memory_size,
+            sample_req=sample_req,
+            loss=loss_sender,
+            metrics=metrics,
+            terminated=terminated
+        )
 
-    data_collection_process = DataCollectionProcess(
-        network=network_recv,
-        data=data_sender,
-        device=device,
-        terminated=terminated
-    )
+        data_collection_process = DataCollectionProcess(
+            network=network_recv,
+            data=data_sender,
+            device=device,
+            terminated=terminated
+        )
 
-    memory_managment_process = MemoryManagmentProcess(
-        data=data_recv,
-        data_updates=data_updates_recv,
-        samples=samples_sender,
-        memory_size=memory_size,
-        sample_req=sample_req,
-        terminated=terminated
-    )
+        memory_managment_process = MemoryManagmentProcess(
+            data=data_recv,
+            data_updates=data_updates_recv,
+            samples=samples_sender,
+            memory_size=memory_size,
+            sample_req=sample_req,
+            loss=loss_recv,
+            metrics=metrics,
+            terminated=terminated
+        )
 
-    data_collection_process.start()
-    memory_managment_process.start()
+        data_collection_process.start()
+        memory_managment_process.start()
 
-    training_process.training_loop(EPOCHS, BATCH_SIZE, GAMMA)
+        training_process.training_loop(EPOCHS, BATCH_SIZE, GAMMA)
 
 
 if __name__ == '__main__':

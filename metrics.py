@@ -63,10 +63,10 @@ class TrainMatrics:
 
     @property
     def highest_reward(self):
-        return max(self._episode_rewards)
+        return max(self._episode_rewards) if len(self._episode_rewards) else None
 
     @property
     def longest_episode(self):
-        return max(self._episode_lengths)
+        return max(self._episode_lengths) if len(self._episode_lengths) else None
 
 
