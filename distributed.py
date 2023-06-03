@@ -35,7 +35,7 @@ class TrainingProcess:
         self.optimizer = torch.optim.AdamW(self.predict_network.parameters(), lr=LR, amsgrad=True)
         self.metrics = TrainMatrics()
 
-    def training_step(self, batch_size, gamma, data_update, samples):
+    def training_step(self, gamma, data_update, samples):
         self.predict_network.train()
         self.target_network.train()
 
@@ -73,7 +73,7 @@ class TrainingProcess:
         for epoch in range(epochs):
             print(f'======== {epoch + 1}/{epochs} epoch ========')
             sample_req.value = True
-            self.training_step(batch_size, GAMMA, data_update, samples)
+            self.training_step(GAMMA, data_update, samples)
             self.metrics.calculate()
 
             print(f'Loss: {self.metrics.loss}')
@@ -94,6 +94,8 @@ class MemoryManagmentProcess(Process):
             alpha=ALPHA, beta=BETA
         )
 
+        self.metrics = TrainMatrics()
+
         self.data = data
         self.data_updates = data_updates
         self.samples = samples
@@ -102,30 +104,46 @@ class MemoryManagmentProcess(Process):
         self.sample_req = sample_req
 
     def update_priorities(self):
-        update = self.data_updates.recv()
-        self.memory.update_priorities(data_idxs=update['idxs'], priorities=update['priorities'])
+        if self.data_updates.poll():
+            update = self.data_updates.recv()
+            self.memory.update_priorities(data_idxs=update['idxs'], priorities=update['priorities'])
+
+    def update_data(self):
+        if self.data.poll(timeout=999):
+            data = self.data.recv()
+            self.memory.add(data)
+            self.metrics.push_reward(data[3], data[4])
+            self.metrics.calculate()
+
+    def send_sample(self):
+        if self.sample_req.value:
+            self.samples.send(self.memory.sample(BATCH_SIZE))
+            self.sample_req.value = False
+
+    def save_metrics(self):
+        self.metrics.save('', 'metrics.pkl')
 
     def run(self):
         while True:
             self.memory_size.value = len(self.memory)
-            if self.data.poll(timeout=999):
-                self.memory.add(self.data.recv())
-            if self.data_updates.poll():
-                self.update_priorities()
-            if self.sample_req.value:
-                self.samples.send(self.memory.sample(BATCH_SIZE))
-                self.sample_req.value = False
+
+            self.update_data()
+            self.update_priorities()
+            self.send_sample()
+
             if self.terminated.value:
                 break
 
+        self.save_metrics()
+
 
 class DataCollectionProcess(Process):
-    def __init__(self, network, data, terminated):
+    def __init__(self, network, data, device, terminated):
         Process.__init__(self)
         self.predict_network = network
         self.data = data
         self.terminated = terminated
-        self.device = torch.device('cpu')
+        self.device = device
         self.game = GameEnviroment(SCREEN_SIZE, FPS, False)
 
     def epsilon_greedy_policy(self, epsilon, state):
@@ -150,9 +168,8 @@ class DataCollectionProcess(Process):
         terminated = torch.tensor(terminated)
         next_state = torch.tensor(next_state).unsqueeze(1).reshape(STATE_DIM)
 
-        # metrics.push_reward(reward, terminated)
         data = (state, next_state, action, reward, terminated)
-        return data, terminated
+        return data
 
     def run(self):
         self.game.execute()
@@ -160,11 +177,13 @@ class DataCollectionProcess(Process):
             if self.terminated.value:
                 break
 
-            data, terminated = self.do_one_step(0.1)
+            data = self.do_one_step(0.1)
             self.data.send(data)
 
 
 def main():
+    torch.multiprocessing.set_start_method('spawn', force=True)
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     predict_network = DQN().to(device)
     predict_network.share_memory()
@@ -186,6 +205,7 @@ def main():
     data_collection_process = DataCollectionProcess(
         predict_network,
         data_sender,
+        device,
         terminated
     )
 

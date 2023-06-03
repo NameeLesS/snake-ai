@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 from torch import nn
-from multiprocessing import Process, Manager
 
 from game import GameEnviroment
 from memory import PrioritizedReplayBuffer
