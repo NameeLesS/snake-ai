@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import os
 from torch import nn
 from torch.multiprocessing import Process, Value, Pipe, Manager
 
@@ -15,14 +16,14 @@ STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 # Training constants
 LR = 1e-4
 GAMMA = 0.99
-BATCH_SIZE = 8
-EPOCHS = 200
-TARGET_UPDATE_FREQUENCY = 100
-STEPS = 50
+BATCH_SIZE = 32
+EPOCHS = 50000
+TARGET_UPDATE_FREQUENCY = 2000
+STEPS = 200
 DECAY_RATE_CHANGE = 7e-6
 
 # Memory constants
-MEMORY_SIZE = 200
+MEMORY_SIZE = 200000
 ALPHA = 0.9
 BETA = 0.4
 
@@ -30,7 +31,7 @@ possible_actions = [0, 1, 2, 3]
 
 
 class TrainingProcess:
-    def __init__(self, predict_network, target_network, device, metrics, network, data_updates, samples, memory_size, sample_req, loss, terminated):
+    def __init__(self, predict_network, target_network, device, metrics, network, data_updates, samples, memory_size, sample_req, loss, terminated, model_path=None, save_path=''):
         self.predict_network = predict_network
         self.target_network = target_network
         self.device = device
@@ -42,6 +43,8 @@ class TrainingProcess:
         self.sample_req = sample_req
         self.loss = loss
         self.terminated = terminated
+        self.model_path = model_path
+        self.save_path = save_path
 
         self.optimizer = torch.optim.AdamW(self.predict_network.parameters(), lr=LR, amsgrad=True)
 
@@ -96,10 +99,23 @@ class TrainingProcess:
                 self.loss.send(loss)
                 self.network.send(self.predict_network.state_dict())
         self.terminated.value = True
+        self.save_model()
+
+    def save_model(self):
+        if not os.path.exists(self.save_path):
+            os.makedirs(self.save_path)
+        torch.save(self.predict_network.state_dict(), os.path.join(self.save_path, 'model.pth'))
+
+    def load_model(self):
+        if self.model_path is not None:
+            self.predict_network.load_state_dict(torch.load(os.path.join(self.model_path, 'model.pth')))
+            self.target_network.load_state_dict(self.predict_network.state_dict())
+        else:
+            print('Model not found, creating new one')
 
 
 class MemoryManagmentProcess(Process):
-    def __init__(self, data, metrics, data_updates, samples, memory_size, sample_req, loss, terminated):
+    def __init__(self, data, metrics, data_updates, samples, memory_size, sample_req, loss, terminated, save_path=''):
         Process.__init__(self)
         self.memory = PrioritizedReplayBuffer(
             buffer_size=MEMORY_SIZE,
@@ -118,6 +134,7 @@ class MemoryManagmentProcess(Process):
         self.sample_req = sample_req
         self.loss = loss
         self.metrics_summary = metrics
+        self.save_path = save_path
 
     def update_priorities(self):
         if self.data_updates.poll():
@@ -129,7 +146,6 @@ class MemoryManagmentProcess(Process):
             data = self.data.recv()
             self.memory.add(data)
             self.metrics.push_reward(data[3], data[4])
-            self.metrics.calculate()
 
     def send_sample(self):
         if self.sample_req.value:
@@ -141,26 +157,33 @@ class MemoryManagmentProcess(Process):
             self.metrics.push_loss(self.loss.recv())
 
     def save_metrics(self):
-        self.metrics.save('', 'metrics.pkl')
+        if not os.path.exists(self.save_path):
+            os.makedirs(self.save_path)
+        self.metrics.save(self.save_path, 'metrics')
 
     def run(self):
-        while True:
-            self.memory_size.value = len(self.memory)
+        try:
+            while True:
+                self.memory_size.value = len(self.memory)
 
-            self.update_data()
-            self.update_priorities()
-            self.send_sample()
-            self.update_metrics()
-            self.metrics_summary.update({
-                'average_rewards': self.metrics.average_rewards,
-                'highest_reward': self.metrics.highest_reward,
-                'average_episode_length': self.metrics.average_episode_length,
-                'longest_episode': self.metrics.longest_episode
-            })
+                self.update_data()
+                self.update_priorities()
+                self.send_sample()
+                self.update_metrics()
 
-            if self.terminated.value:
-                break
+                self.metrics.calculate()
+                self.metrics_summary.update({
+                    'average_rewards': self.metrics.average_rewards,
+                    'highest_reward': self.metrics.highest_reward,
+                    'average_episode_length': self.metrics.average_episode_length,
+                    'longest_episode': self.metrics.longest_episode
+                })
 
+                if self.terminated.value:
+                    break
+
+        except (Exception, KeyboardInterrupt) as e:
+            self.save_metrics()
         self.save_metrics()
 
 
@@ -247,6 +270,7 @@ def main():
             sample_req=sample_req,
             loss=loss_sender,
             metrics=metrics,
+            save_path='/kaggle/working/backups/models/',
             terminated=terminated
         )
 
@@ -265,13 +289,20 @@ def main():
             sample_req=sample_req,
             loss=loss_recv,
             metrics=metrics,
+            save_path='/kaggle/working/backups/metrics/',
             terminated=terminated
         )
 
         data_collection_process.start()
         memory_managment_process.start()
 
-        training_process.training_loop(EPOCHS, BATCH_SIZE, GAMMA)
+        try:
+            training_process.training_loop(EPOCHS, BATCH_SIZE, GAMMA)
+        except (Exception, KeyboardInterrupt) as e:
+            training_process.save_model()
+
+        data_collection_process.join()
+        memory_managment_process.join()
 
 
 if __name__ == '__main__':
