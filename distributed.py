@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import os
 from torch import nn
-from torch.multiprocessing import Process, Value, Pipe, Manager
+from torch.multiprocessing import Process, Value, Pipe, Manager, Event, Semaphore
 
 from game import GameEnviroment
 from memory import PrioritizedReplayBuffer
@@ -16,14 +16,14 @@ STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 # Training constants
 LR = 1e-4
 GAMMA = 0.99
-BATCH_SIZE = 32
+BATCH_SIZE = 8
 EPOCHS = 50000
 TARGET_UPDATE_FREQUENCY = 2000
 STEPS = 200
 DECAY_RATE_CHANGE = 7e-6
 
 # Memory constants
-MEMORY_SIZE = 200000
+MEMORY_SIZE = 200
 ALPHA = 0.9
 BETA = 0.4
 
@@ -31,7 +31,23 @@ possible_actions = [0, 1, 2, 3]
 
 
 class TrainingProcess:
-    def __init__(self, predict_network, target_network, device, metrics, network, data_updates, samples, memory_size, sample_req, loss, terminated, model_path=None, save_path=''):
+    def __init__(
+            self,
+            predict_network,
+            target_network,
+            device,
+            metrics,
+            network,
+            data_updates,
+            samples,
+            memory_size,
+            sample_request_event,
+            data_collection_trigger,
+            loss,
+            terminated,
+            model_path=None,
+            save_path=''
+    ):
         self.predict_network = predict_network
         self.target_network = target_network
         self.device = device
@@ -40,7 +56,8 @@ class TrainingProcess:
         self.data_updates = data_updates
         self.samples = samples
         self.memory_size = memory_size
-        self.sample_req = sample_req
+        self.sample_request_event = sample_request_event
+        self.data_collection_trigger = data_collection_trigger
         self.loss = loss
         self.terminated = terminated
         self.model_path = model_path
@@ -83,8 +100,9 @@ class TrainingProcess:
 
         for epoch in range(epochs):
             print(f'======== {epoch + 1}/{epochs} epoch ========')
-            self.sample_req.value = True
+            self.sample_request_event.set()
             if self.samples.poll(timeout=999):
+
                 sample = self.samples.recv()
 
                 tree_idxs, td_error, loss = self.training_step(gamma, sample)
@@ -98,6 +116,7 @@ class TrainingProcess:
                 self.data_updates.send({'idxs': tree_idxs, 'priorities': td_error.detach()})
                 self.loss.send(loss)
                 self.network.send(self.predict_network.state_dict())
+                self.data_collection_trigger.release()
         self.terminated.value = True
         self.save_model()
 
@@ -115,7 +134,18 @@ class TrainingProcess:
 
 
 class MemoryManagmentProcess(Process):
-    def __init__(self, data, metrics, data_updates, samples, memory_size, sample_req, loss, terminated, save_path=''):
+    def __init__(
+            self,
+            data,
+            metrics,
+            data_updates,
+            samples,
+            memory_size,
+            sample_request_event,
+            loss,
+            terminated,
+            save_path=''
+    ):
         Process.__init__(self)
         self.memory = PrioritizedReplayBuffer(
             buffer_size=MEMORY_SIZE,
@@ -131,7 +161,7 @@ class MemoryManagmentProcess(Process):
         self.samples = samples
         self.terminated = terminated
         self.memory_size = memory_size
-        self.sample_req = sample_req
+        self.sample_request_event = sample_request_event
         self.loss = loss
         self.metrics_summary = metrics
         self.save_path = save_path
@@ -148,9 +178,9 @@ class MemoryManagmentProcess(Process):
             self.metrics.push_reward(data[3], data[4])
 
     def send_sample(self):
-        if self.sample_req.value:
+        if self.sample_request_event.is_set():
             self.samples.send(self.memory.sample(BATCH_SIZE))
-            self.sample_req.value = False
+            self.sample_request_event.clear()
 
     def update_metrics(self):
         if self.loss.poll():
@@ -188,13 +218,21 @@ class MemoryManagmentProcess(Process):
 
 
 class DataCollectionProcess(Process):
-    def __init__(self, network, data, device, terminated):
+    def __init__(
+            self,
+            network,
+            data,
+            device,
+            data_collection_trigger,
+            terminated
+    ):
         Process.__init__(self)
         self.predict_network = DQN().to(device)
         self.network = network
         self.data = data
         self.terminated = terminated
         self.device = device
+        self.data_collection_trigger = data_collection_trigger
         self.game = GameEnviroment(SCREEN_SIZE, FPS, False)
 
     def epsilon_greedy_policy(self, epsilon, state):
@@ -222,20 +260,26 @@ class DataCollectionProcess(Process):
         data = (state, next_state, action, reward, terminated)
         return data
 
+    def collect_data(self, epoch):
+        if self.network.poll(timeout=999):
+            self.predict_network.load_state_dict(self.network.recv())
+            for step in range(STEPS):
+                epsilon = 1 * (1 - DECAY_RATE_CHANGE) ** epoch
+                data = self.do_one_step(epsilon)
+                self.data.send(data)
+
     def run(self):
         self.game.execute()
-        i = 0
+        epoch = 0
         while True:
+            self.data_collection_trigger.acquire()
+            print(f"Running data collection for epoch: {epoch}")
+
             if self.terminated.value:
                 break
 
-            if self.network.poll(timeout=999):
-                self.predict_network.load_state_dict(self.network.recv())
-                for step in range(STEPS):
-                    epsilon = 1 * (1 - DECAY_RATE_CHANGE) ** i
-                    data = self.do_one_step(epsilon)
-                    self.data.send(data)
-            i += 1
+            self.collect_data(epoch)
+            epoch += 1
 
 
 def main():
@@ -252,8 +296,9 @@ def main():
         data_updates_recv, data_updated_sender = Pipe()
         samples_recv, samples_sender = Pipe()
         loss_recv, loss_sender = Pipe()
+        sample_request_event = Event()
+        data_collection_trigger = Semaphore()
         terminated = Value('b', False)
-        sample_req = Value('b', False)
         memory_size = Value('i', 0)
         metrics = manager.dict()
 
@@ -267,10 +312,11 @@ def main():
             data_updates=data_updated_sender,
             samples=samples_recv,
             memory_size=memory_size,
-            sample_req=sample_req,
+            sample_request_event=sample_request_event,
+            data_collection_trigger=data_collection_trigger,
             loss=loss_sender,
             metrics=metrics,
-            save_path='/kaggle/working/backups/models/',
+            save_path='backups/models/',
             terminated=terminated
         )
 
@@ -278,6 +324,7 @@ def main():
             network=network_recv,
             data=data_sender,
             device=device,
+            data_collection_trigger=data_collection_trigger,
             terminated=terminated
         )
 
@@ -286,10 +333,10 @@ def main():
             data_updates=data_updates_recv,
             samples=samples_sender,
             memory_size=memory_size,
-            sample_req=sample_req,
+            sample_request_event=sample_request_event,
             loss=loss_recv,
             metrics=metrics,
-            save_path='/kaggle/working/backups/metrics/',
+            save_path='backups/metrics/',
             terminated=terminated
         )
 
