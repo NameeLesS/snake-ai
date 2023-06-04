@@ -1,13 +1,12 @@
 import pygame
 
 from body import Body
-import sys
 
 
 class Snake:
     def __init__(self, color, width, height, position):
         self.color = color
-        self.width, self. height = width, height
+        self.width, self.height = width, height
         self.snake_group = pygame.sprite.Group()
         self.head = Body(color, width, height, position, head=True)
         self.head._owner = self

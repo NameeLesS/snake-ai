@@ -30,7 +30,8 @@ class Graphs:
 
             return self.reward_series
         else:
-            return (len(self.rewards), np.sum(self.rewards, 0)[0], self.reward_series[-1] if len(self.reward_series) else None)
+            return (
+            len(self.rewards), np.sum(self.rewards, 0)[0], self.reward_series[-1] if len(self.reward_series) else None)
 
     def push_loss(self, loss):
         if isinstance(loss, torch.Tensor):

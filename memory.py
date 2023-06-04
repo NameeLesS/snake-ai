@@ -76,7 +76,6 @@ class PrioritizedReplayBuffer:
             priorities = priorities.detach().cpu().numpy()
 
         for idx, priority in zip(data_idxs, priorities):
-
             priority = (priority + self.eps) ** self.alpha
             self.tree.update(idx, priority)
             self.max_prority = max(self.max_prority, priority)

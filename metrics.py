@@ -68,5 +68,3 @@ class TrainMatrics:
     @property
     def longest_episode(self):
         return max(self._episode_lengths) if len(self._episode_lengths) else None
-
-

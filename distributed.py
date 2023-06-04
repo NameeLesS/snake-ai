@@ -2,7 +2,14 @@ import torch
 import numpy as np
 import os
 from torch import nn
-from torch.multiprocessing import Process, Value, Pipe, Manager, Event, Semaphore
+from torch.multiprocessing import (
+    Process,
+    Value,
+    Pipe,
+    Manager,
+    Event,
+    Semaphore
+)
 
 from game import GameEnviroment
 from memory import PrioritizedReplayBuffer
@@ -102,13 +109,17 @@ class TrainingProcess:
             print(f'======== {epoch + 1}/{epochs} epoch ========')
             self.sample_request_event.set()
             if self.samples.poll(timeout=999):
-
                 sample = self.samples.recv()
 
                 tree_idxs, td_error, loss = self.training_step(gamma, sample)
 
-                print(f'Loss: {loss} Average rewards: {self.metrics["average_rewards"]} Average episode length: {self.metrics["average_episode_length"]} ')
-                print(f'Highest reward: {self.metrics["highest_reward"]} Longest episode: {self.metrics["longest_episode"]}')
+                print(
+                    f'Loss: {loss} '
+                    f'Average rewards: {self.metrics["average_rewards"]} '
+                    f'Average episode length: {self.metrics["average_episode_length"]}')
+                print(
+                    f'Highest reward: {self.metrics["highest_reward"]} '
+                    f'Longest episode: {self.metrics["longest_episode"]}')
 
                 if epoch % TARGET_UPDATE_FREQUENCY == 0:
                     self.target_network.load_state_dict(self.predict_network.state_dict())
