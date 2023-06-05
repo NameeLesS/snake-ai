@@ -26,11 +26,11 @@ GAMMA = 0.99
 BATCH_SIZE = 8
 EPOCHS = 50000
 TARGET_UPDATE_FREQUENCY = 2000
-STEPS = 200
+STEPS = 20
 DECAY_RATE_CHANGE = 7e-6
 
 # Memory constants
-MEMORY_SIZE = 200
+MEMORY_SIZE = 100000
 ALPHA = 0.9
 BETA = 0.4
 
@@ -158,14 +158,8 @@ class MemoryManagmentProcess(Process):
             save_path=''
     ):
         Process.__init__(self)
-        self.memory = PrioritizedReplayBuffer(
-            buffer_size=MEMORY_SIZE,
-            state_dim=STATE_DIM,
-            action_dim=(1),
-            alpha=ALPHA, beta=BETA
-        )
-
-        self.metrics = TrainMatrics()
+        self.memory = None
+        self.metrics = None
 
         self.data = data
         self.data_updates = data_updates
@@ -176,6 +170,17 @@ class MemoryManagmentProcess(Process):
         self.loss = loss
         self.metrics_summary = metrics
         self.save_path = save_path
+
+    def init(self):
+        self.memory = PrioritizedReplayBuffer(
+            buffer_size=MEMORY_SIZE,
+            state_dim=STATE_DIM,
+            action_dim=(1),
+            alpha=ALPHA,
+            beta=BETA
+        )
+
+        self.metrics = TrainMatrics()
 
     def update_priorities(self):
         if self.data_updates.poll():
@@ -203,6 +208,7 @@ class MemoryManagmentProcess(Process):
         self.metrics.save(self.save_path, 'metrics')
 
     def run(self):
+        self.init()
         try:
             while True:
                 self.memory_size.value = len(self.memory)
@@ -238,17 +244,22 @@ class DataCollectionProcess(Process):
             terminated
     ):
         Process.__init__(self)
-        self.predict_network = DQN().to(device)
+        self.predict_network = None
         self.network = network
         self.data = data
         self.terminated = terminated
         self.device = device
         self.data_collection_trigger = data_collection_trigger
+        self.game = None
+
+    def init(self):
+        self.predict_network = DQN().to(self.device)
         self.game = GameEnviroment(SCREEN_SIZE, FPS, False)
+        self.game.execute()
 
     def epsilon_greedy_policy(self, epsilon, state):
         if np.random.rand() < epsilon:
-            return np.random.choice(possible_actions)
+            return torch.tensor(np.random.choice(possible_actions))
         else:
             self.predict_network.eval()
 
@@ -271,17 +282,18 @@ class DataCollectionProcess(Process):
         data = (state, next_state, action, reward, terminated)
         return data
 
-    def collect_data(self, epoch):
+    def collect_data(self, epoch, steps):
         if self.network.poll(timeout=999):
             self.predict_network.load_state_dict(self.network.recv())
-            for step in range(STEPS):
+            for step in range(steps):
                 epsilon = 1 * (1 - DECAY_RATE_CHANGE) ** epoch
                 data = self.do_one_step(epsilon)
                 self.data.send(data)
 
     def run(self):
-        self.game.execute()
+        self.init()
         epoch = 0
+        self.collect_data(epoch, 200)
         while True:
             self.data_collection_trigger.acquire()
             print(f"Running data collection for epoch: {epoch}")
@@ -289,7 +301,7 @@ class DataCollectionProcess(Process):
             if self.terminated.value:
                 break
 
-            self.collect_data(epoch)
+            self.collect_data(epoch, STEPS)
             epoch += 1
 
 
