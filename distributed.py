@@ -126,7 +126,10 @@ class TrainingProcess:
 
                 self.data_updates.send({'idxs': tree_idxs, 'priorities': td_error.detach()})
                 self.loss.send(loss)
-                self.network.send(self.predict_network.state_dict())
+                self.network.send({
+                    'epoch': epoch,
+                    'network': self.predict_network.state_dict()
+                })
                 self.data_collection_trigger.release()
         self.terminated.value = True
         self.save_model()
@@ -282,27 +285,26 @@ class DataCollectionProcess(Process):
         data = (state, next_state, action, reward, terminated)
         return data
 
-    def collect_data(self, epoch, steps):
+    def collect_data(self, steps):
         if self.network.poll(timeout=999):
-            self.predict_network.load_state_dict(self.network.recv())
+            network = self.network.recv()
+            print(f"Running data collection for epoch: {network['epoch']}")
+            self.predict_network.load_state_dict(network['network'])
             for step in range(steps):
-                epsilon = 1 * (1 - DECAY_RATE_CHANGE) ** epoch
+                epsilon = 1 * (1 - DECAY_RATE_CHANGE) ** network['epoch']
                 data = self.do_one_step(epsilon)
                 self.data.send(data)
 
     def run(self):
         self.init()
-        epoch = 0
-        self.collect_data(epoch, 200)
+        self.collect_data(200)
         while True:
             self.data_collection_trigger.acquire()
-            print(f"Running data collection for epoch: {epoch}")
 
             if self.terminated.value:
                 break
 
-            self.collect_data(epoch, STEPS)
-            epoch += 1
+            self.collect_data(STEPS)
 
 
 def main():
@@ -320,12 +322,15 @@ def main():
         samples_recv, samples_sender = Pipe()
         loss_recv, loss_sender = Pipe()
         sample_request_event = Event()
-        data_collection_trigger = Semaphore()
+        data_collection_trigger = Semaphore(0)
         terminated = Value('b', False)
         memory_size = Value('i', 0)
         metrics = manager.dict()
 
-        network_sender.send(predict_network.state_dict())
+        network_sender.send({
+            'epoch': 0,
+            'network': predict_network.state_dict()
+        })
 
         training_process = TrainingProcess(
             predict_network=predict_network,
@@ -343,13 +348,13 @@ def main():
             terminated=terminated
         )
 
-        data_collection_process = DataCollectionProcess(
+        data_collection_processes = [DataCollectionProcess(
             network=network_recv,
             data=data_sender,
             device=device,
             data_collection_trigger=data_collection_trigger,
             terminated=terminated
-        )
+        ) for _ in range(torch.multiprocessing.cpu_count() - 2)]
 
         memory_managment_process = MemoryManagmentProcess(
             data=data_recv,
@@ -363,7 +368,8 @@ def main():
             terminated=terminated
         )
 
-        data_collection_process.start()
+        for data_collection_process in data_collection_processes:
+            data_collection_process.start()
         memory_managment_process.start()
 
         try:
