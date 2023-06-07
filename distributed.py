@@ -6,7 +6,7 @@ from torch.multiprocessing import (
     Process,
     Value,
     Pipe,
-    Manager,
+    Array,
     Event,
     RLock
 )
@@ -72,7 +72,7 @@ class TrainingProcess:
 
     def training_step(self, gamma, sample):
         self.predict_network.train()
-        self.target_network.train()
+        self.target_network.eval()
 
         batch, weights, tree_idxs = sample
         states, next_states, actions, rewards, terminated = batch
@@ -113,11 +113,11 @@ class TrainingProcess:
 
                 print(
                     f'Loss: {loss} '
-                    f'Average rewards: {self.metrics["average_rewards"]} '
-                    f'Average episode length: {self.metrics["average_episode_length"]}')
+                    f'Average rewards: {self.metrics[0]} '
+                    f'Average episode length: {self.metrics[1]}')
                 print(
-                    f'Highest reward: {self.metrics["highest_reward"]} '
-                    f'Longest episode: {self.metrics["longest_episode"]}')
+                    f'Highest reward: {self.metrics[2]} '
+                    f'Longest episode: {self.metrics[3]}')
 
                 if epoch % TARGET_UPDATE_FREQUENCY == 0:
                     self.target_network.load_state_dict(self.predict_network.state_dict())
@@ -219,12 +219,10 @@ class MemoryManagmentProcess(Process):
                 self.update_metrics()
 
                 self.metrics.calculate()
-                self.metrics_summary.update({
-                    'average_rewards': self.metrics.average_rewards,
-                    'highest_reward': self.metrics.highest_reward,
-                    'average_episode_length': self.metrics.average_episode_length,
-                    'longest_episode': self.metrics.longest_episode
-                })
+                self.metrics_summary[0] = self.metrics.average_rewards
+                self.metrics_summary[1] = self.metrics.average_episode_length
+                self.metrics_summary[2] = self.metrics.highest_reward
+                self.metrics_summary[3] = self.metrics.longest_episode
 
                 if self.terminated.value:
                     break
@@ -312,69 +310,69 @@ def main():
     target_network = DQN().to(device)
     target_network.load_state_dict(predict_network.state_dict())
 
-    with Manager() as manager:
-        network_recv, network_sender = Pipe()
-        data_recv, data_sender = Pipe()
-        data_updates_recv, data_updated_sender = Pipe()
-        samples_recv, samples_sender = Pipe()
-        loss_recv, loss_sender = Pipe()
-        sample_request_event = Event()
-        data_collection_lock = RLock()
-        terminated = Value('b', False)
-        memory_size = Value('i', 0)
-        metrics = manager.dict()
+    metrics = Array('d', 4)
+    network_recv, network_sender = Pipe()
+    data_recv, data_sender = Pipe()
+    data_updates_recv, data_updated_sender = Pipe()
+    samples_recv, samples_sender = Pipe()
+    loss_recv, loss_sender = Pipe()
+    sample_request_event = Event()
+    data_collection_lock = RLock()
+    terminated = Value('b', False)
+    memory_size = Value('i', 0)
 
-        network_sender.send({
-            'epoch': 0,
-            'network': predict_network.state_dict()
-        })
+    network_sender.send({
+        'epoch': 0,
+        'network': predict_network.state_dict()
+    })
 
-        training_process = TrainingProcess(
-            predict_network=predict_network,
-            target_network=target_network,
-            device=device,
-            network=network_sender,
-            data_updates=data_updated_sender,
-            samples=samples_recv,
-            memory_size=memory_size,
-            sample_request_event=sample_request_event,
-            loss=loss_sender,
-            metrics=metrics,
-            save_path='backups/models/',
-            terminated=terminated
-        )
+    training_process = TrainingProcess(
+        predict_network=predict_network,
+        target_network=target_network,
+        device=device,
+        network=network_sender,
+        data_updates=data_updated_sender,
+        samples=samples_recv,
+        memory_size=memory_size,
+        sample_request_event=sample_request_event,
+        loss=loss_sender,
+        metrics=metrics,
+        save_path='backups/models/',
+        terminated=terminated
+    )
 
-        data_collection_processes = [DataCollectionProcess(
-            network=network_recv,
-            data=data_sender,
-            device=device,
-            data_collection_lock=data_collection_lock,
-            terminated=terminated
-        ) for _ in range(torch.multiprocessing.cpu_count())]
+    data_collection_processes = [DataCollectionProcess(
+        network=network_recv,
+        data=data_sender,
+        device=device,
+        data_collection_lock=data_collection_lock,
+        terminated=terminated
+    ) for _ in range(1)]
 
-        memory_managment_process = MemoryManagmentProcess(
-            data=data_recv,
-            data_updates=data_updates_recv,
-            samples=samples_sender,
-            memory_size=memory_size,
-            sample_request_event=sample_request_event,
-            loss=loss_recv,
-            metrics=metrics,
-            save_path='backups/metrics/',
-            terminated=terminated
-        )
+    memory_managment_process = MemoryManagmentProcess(
+        data=data_recv,
+        data_updates=data_updates_recv,
+        samples=samples_sender,
+        memory_size=memory_size,
+        sample_request_event=sample_request_event,
+        loss=loss_recv,
+        metrics=metrics,
+        save_path='backups/metrics/',
+        terminated=terminated
+    )
 
-        for data_collection_process in data_collection_processes:
-            data_collection_process.start()
-        memory_managment_process.start()
+    for data_collection_process in data_collection_processes:
+        data_collection_process.start()
+    memory_managment_process.start()
 
-        try:
-            training_process.training_loop(EPOCHS, BATCH_SIZE, GAMMA)
-        except (Exception, KeyboardInterrupt) as e:
-            training_process.save_model()
+    try:
+        training_process.training_loop(EPOCHS, BATCH_SIZE, GAMMA)
+    except (Exception, KeyboardInterrupt) as e:
+        training_process.save_model()
 
+    for data_collection_process in data_collection_processes:
         data_collection_process.join()
-        memory_managment_process.join()
+    memory_managment_process.join()
 
 
 if __name__ == '__main__':
