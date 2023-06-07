@@ -8,7 +8,7 @@ from torch.multiprocessing import (
     Pipe,
     Manager,
     Event,
-    Semaphore
+    RLock
 )
 
 from game import GameEnviroment
@@ -49,7 +49,6 @@ class TrainingProcess:
             samples,
             memory_size,
             sample_request_event,
-            data_collection_trigger,
             loss,
             terminated,
             model_path=None,
@@ -64,7 +63,6 @@ class TrainingProcess:
         self.samples = samples
         self.memory_size = memory_size
         self.sample_request_event = sample_request_event
-        self.data_collection_trigger = data_collection_trigger
         self.loss = loss
         self.terminated = terminated
         self.model_path = model_path
@@ -130,7 +128,6 @@ class TrainingProcess:
                     'epoch': epoch,
                     'network': self.predict_network.state_dict()
                 })
-                self.data_collection_trigger.release()
         self.terminated.value = True
         self.save_model()
 
@@ -243,7 +240,7 @@ class DataCollectionProcess(Process):
             network,
             data,
             device,
-            data_collection_trigger,
+            data_collection_lock,
             terminated
     ):
         Process.__init__(self)
@@ -252,7 +249,7 @@ class DataCollectionProcess(Process):
         self.data = data
         self.terminated = terminated
         self.device = device
-        self.data_collection_trigger = data_collection_trigger
+        self.data_collection_lock = data_collection_lock
         self.game = None
 
     def init(self):
@@ -286,8 +283,10 @@ class DataCollectionProcess(Process):
         return data
 
     def collect_data(self, steps):
+        self.data_collection_lock.acquire()
         if self.network.poll(timeout=999):
             network = self.network.recv()
+            self.data_collection_lock.release()
             print(f"Running data collection for epoch: {network['epoch']}")
             self.predict_network.load_state_dict(network['network'])
             for step in range(steps):
@@ -299,8 +298,6 @@ class DataCollectionProcess(Process):
         self.init()
         self.collect_data(200)
         while True:
-            self.data_collection_trigger.acquire()
-
             if self.terminated.value:
                 break
 
@@ -322,7 +319,7 @@ def main():
         samples_recv, samples_sender = Pipe()
         loss_recv, loss_sender = Pipe()
         sample_request_event = Event()
-        data_collection_trigger = Semaphore(0)
+        data_collection_lock = RLock()
         terminated = Value('b', False)
         memory_size = Value('i', 0)
         metrics = manager.dict()
@@ -341,7 +338,6 @@ def main():
             samples=samples_recv,
             memory_size=memory_size,
             sample_request_event=sample_request_event,
-            data_collection_trigger=data_collection_trigger,
             loss=loss_sender,
             metrics=metrics,
             save_path='backups/models/',
@@ -352,9 +348,9 @@ def main():
             network=network_recv,
             data=data_sender,
             device=device,
-            data_collection_trigger=data_collection_trigger,
+            data_collection_lock=data_collection_lock,
             terminated=terminated
-        ) for _ in range(torch.multiprocessing.cpu_count() - 2)]
+        ) for _ in range(torch.multiprocessing.cpu_count())]
 
         memory_managment_process = MemoryManagmentProcess(
             data=data_recv,
