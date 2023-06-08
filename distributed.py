@@ -17,16 +17,18 @@ from metrics import TrainMatrics
 from network import DQN
 from config import *
 
+import traceback
+
 # General constants
 STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 
 # Training constants
 LR = 1e-4
 GAMMA = 0.99
-BATCH_SIZE = 8
+BATCH_SIZE = 64
 EPOCHS = 50000
 TARGET_UPDATE_FREQUENCY = 2000
-STEPS = 20
+STEPS = 4
 DECAY_RATE_CHANGE = 7e-6
 
 # Memory constants
@@ -82,7 +84,10 @@ class TrainingProcess:
         rewards = rewards.to(self.device)
         terminated = terminated.to(self.device)
 
-        q_values = self.predict_network(states).gather(1, actions)
+        try:
+            q_values = self.predict_network(states).gather(1, actions)
+        except Exception as e:
+            traceback.print_exc()
 
         with torch.no_grad():
             next_state_q_values = self.target_network(next_states).max(axis=1)[0]
@@ -174,7 +179,7 @@ class MemoryManagmentProcess(Process):
     def init(self):
         self.memory = PrioritizedReplayBuffer(
             buffer_size=MEMORY_SIZE,
-            state_dim=STATE_DIM,
+            state_dim=INPUT_SIZE,
             action_dim=(1),
             alpha=ALPHA,
             beta=BETA
@@ -267,18 +272,24 @@ class DataCollectionProcess(Process):
             return torch.argmax(action).to(torch.int)
 
     def do_one_step(self, epsilon):
-        state = torch.tensor(self.game.get_state()).unsqueeze(1).reshape((1, *STATE_DIM)).to(torch.float32).to(
-            self.device)
+        state = self.preprocess_state(self.game.get_state()).to(torch.float32).to(self.device)
+
         action = self.epsilon_greedy_policy(epsilon, state)
 
         reward, next_state, terminated = self.game.step(int(action))
 
         reward = torch.tensor(reward)
         terminated = torch.tensor(terminated)
-        next_state = torch.tensor(next_state).unsqueeze(1).reshape(STATE_DIM)
+        next_state = self.preprocess_state(next_state).to(self.device)
 
         data = (state, next_state, action, reward, terminated)
         return data
+
+    def preprocess_state(self, state):
+        state = torch.tensor(state).unsqueeze(0).unsqueeze(0)
+        state = torch.nn.functional.interpolate(state, INPUT_SIZE[1:3])
+        state = state.squeeze().reshape((1, *INPUT_SIZE))
+        return state
 
     def collect_data(self, steps):
         self.data_collection_lock.acquire()

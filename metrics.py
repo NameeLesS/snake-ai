@@ -6,7 +6,7 @@ import os
 
 class TrainMatrics:
     def __init__(self):
-        self.rewards = np.array([[0, 0]], dtype=np.int)
+        self.rewards = np.array([[0, 0]], dtype=np.int32)
         self.losses = np.array([], dtype=np.float32)
         self._episode_lengths = []
         self._episode_rewards = []
