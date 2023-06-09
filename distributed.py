@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 from torch import nn
+import torchvision.transforms.functional as F
+import torchvision.transforms.transforms as T
 from torch.multiprocessing import (
     Process,
     Value,
@@ -18,8 +20,6 @@ from config import *
 
 import traceback
 import os
-import matplotlib.pyplot as plt
-import time
 
 # General constants
 STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
@@ -34,7 +34,7 @@ STEPS = 4
 DECAY_RATE_CHANGE = 1
 
 # Memory constants
-MEMORY_SIZE = 8
+MEMORY_SIZE = 1000
 ALPHA = 0.9
 BETA = 0.4
 
@@ -110,6 +110,7 @@ class TrainingProcess:
         self.load_model()
 
         for epoch in range(epochs):
+            print(f'======== {epoch + 1}/{epochs} epoch ========')
             self.sample_request_event.set()
             if self.samples.poll(timeout=999):
                 self.sample_request_event.clear()
@@ -178,7 +179,7 @@ class MemoryManagmentProcess(Process):
     def init(self):
         self.memory = PrioritizedReplayBuffer(
             buffer_size=MEMORY_SIZE,
-            state_dim=STATE_DIM,
+            state_dim=INPUT_SIZE,
             action_dim=(1),
             alpha=ALPHA,
             beta=BETA
@@ -192,14 +193,15 @@ class MemoryManagmentProcess(Process):
             self.memory.update_priorities(data_idxs=update['idxs'], priorities=update['priorities'])
 
     def update_data(self):
-        if self.data.poll(timeout=999):
+        if self.data.poll():
             data = self.data.recv()
             self.memory.add(data)
             self.metrics.push_reward(data[3], data[4])
 
     def send_sample(self):
         if self.sample_request_event.is_set():
-            self.samples.send(self.memory.sample(BATCH_SIZE))
+            sample = self.memory.sample(BATCH_SIZE)
+            self.samples.send(sample)
 
     def update_metrics(self):
         if self.loss.poll():
@@ -286,9 +288,11 @@ class DataCollectionProcess(Process):
 
     @staticmethod
     def preprocess_state(state):
-        state = np.dot(state[:, :, :], [0.216, 0.587, 0.144])
-        state = torch.tensor(state)
-        state = state.squeeze().reshape((1, *STATE_DIM))
+        state = F.to_pil_image(state)
+        state = F.to_grayscale(state)
+        state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.NEAREST_EXACT)
+        state = F.pil_to_tensor(state)
+        state = state.squeeze().reshape((1, *INPUT_SIZE))
         return state
 
     def collect_data(self, steps):
@@ -296,7 +300,6 @@ class DataCollectionProcess(Process):
         if self.network.poll(timeout=999):
             network = self.network.recv()
             self.data_collection_lock.release()
-            # print(f"Running data collection for epoch: {network['epoch']}")
             self.predict_network.load_state_dict(network['network'])
             for step in range(steps):
                 epsilon = 1 * ((1 - float(network['epoch']) / EPOCHS) ** DECAY_RATE_CHANGE)
@@ -317,7 +320,6 @@ class DataCollectionProcess(Process):
 
 
 def main():
-    torch.autograd.set_detect_anomaly(True)
     torch.multiprocessing.set_start_method('spawn', force=True)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'

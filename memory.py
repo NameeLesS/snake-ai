@@ -24,6 +24,7 @@ class PrioritizedReplayBuffer:
 
     def add(self, transition):
         state, next_state, action, reward, terminated = transition
+        state, next_state, action, reward, terminated = state.detach(), next_state.detach(), action.detach(), reward.detach(), terminated.detach()
 
         self.tree.add(self.max_prority, self.write_idx)
 
