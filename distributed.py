@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import os
 from torch import nn
 from torch.multiprocessing import (
     Process,
@@ -18,6 +17,7 @@ from network import DQN
 from config import *
 
 import traceback
+import os
 
 # General constants
 STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
@@ -113,6 +113,7 @@ class TrainingProcess:
             self.sample_request_event.set()
             if self.samples.poll(timeout=999):
                 sample = self.samples.recv()
+                self.sample_request_event.clear()
 
                 tree_idxs, td_error, loss = self.training_step(gamma, sample)
 
@@ -201,11 +202,16 @@ class MemoryManagmentProcess(Process):
     def send_sample(self):
         if self.sample_request_event.is_set():
             self.samples.send(self.memory.sample(BATCH_SIZE))
-            self.sample_request_event.clear()
 
     def update_metrics(self):
         if self.loss.poll():
             self.metrics.push_loss(self.loss.recv())
+
+        self.metrics.calculate()
+        self.metrics_summary[0] = self.metrics.average_rewards
+        self.metrics_summary[1] = self.metrics.average_episode_length
+        self.metrics_summary[2] = self.metrics.highest_reward
+        self.metrics_summary[3] = self.metrics.longest_episode
 
     def save_metrics(self):
         if not os.path.exists(self.save_path):
@@ -223,16 +229,11 @@ class MemoryManagmentProcess(Process):
                 self.send_sample()
                 self.update_metrics()
 
-                self.metrics.calculate()
-                self.metrics_summary[0] = self.metrics.average_rewards
-                self.metrics_summary[1] = self.metrics.average_episode_length
-                self.metrics_summary[2] = self.metrics.highest_reward
-                self.metrics_summary[3] = self.metrics.longest_episode
-
                 if self.terminated.value:
                     break
 
         except (Exception, KeyboardInterrupt) as e:
+            traceback.print_exc()
             self.save_metrics()
         self.save_metrics()
 
@@ -306,11 +307,14 @@ class DataCollectionProcess(Process):
     def run(self):
         self.init()
         self.collect_data(200)
-        while True:
-            if self.terminated.value:
-                break
+        try:
+            while True:
+                if self.terminated.value:
+                    break
 
-            self.collect_data(STEPS)
+                self.collect_data(STEPS)
+        except:
+            traceback.print_exc()
 
 
 def main():
@@ -358,7 +362,7 @@ def main():
         device=device,
         data_collection_lock=data_collection_lock,
         terminated=terminated
-    ) for _ in range(1)]
+    ) for _ in range(torch.multiprocessing.cpu_count())]
 
     memory_managment_process = MemoryManagmentProcess(
         data=data_recv,
@@ -379,6 +383,7 @@ def main():
     try:
         training_process.training_loop(EPOCHS, BATCH_SIZE, GAMMA)
     except (Exception, KeyboardInterrupt) as e:
+        traceback.print_exc()
         training_process.save_model()
 
     for data_collection_process in data_collection_processes:
