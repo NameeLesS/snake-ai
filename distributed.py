@@ -1,8 +1,6 @@
 import torch
 import numpy as np
 from torch import nn
-import torchvision.transforms.functional as F
-import torchvision.transforms.transforms as T
 from torch.multiprocessing import (
     Process,
     Value,
@@ -20,21 +18,23 @@ from config import *
 
 import traceback
 import os
+import matplotlib.pyplot as plt
+import time
 
 # General constants
 STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 
 # Training constants
-LR = 1e-6
+LR = 1e-4
 GAMMA = 0.99
-BATCH_SIZE = 32
+BATCH_SIZE = 8
 EPOCHS = 200000
-TARGET_UPDATE_FREQUENCY = 10000
+TARGET_UPDATE_FREQUENCY = 5000
 STEPS = 4
 DECAY_RATE_CHANGE = 1
 
 # Memory constants
-MEMORY_SIZE = 50000
+MEMORY_SIZE = 8
 ALPHA = 0.9
 BETA = 0.4
 
@@ -110,13 +110,11 @@ class TrainingProcess:
         self.load_model()
 
         for epoch in range(epochs):
-            # print(f'======== {epoch + 1}/{epochs} epoch ========')
             self.sample_request_event.set()
             if self.samples.poll(timeout=999):
                 self.sample_request_event.clear()
                 sample = self.samples.recv()
                 tree_idxs, td_error, loss = self.training_step(gamma, sample)
-                # print(f'Loss: {loss}')
 
                 if epoch % TARGET_UPDATE_FREQUENCY == 0:
                     self.target_network.load_state_dict(self.predict_network.state_dict())
@@ -364,7 +362,7 @@ def main():
         device=device,
         data_collection_lock=data_collection_lock,
         terminated=terminated
-    ) for _ in range(1)] # torch.multiprocessing.cpu_count()
+    ) for _ in range(2)] # torch.multiprocessing.cpu_count()
 
     memory_managment_process = MemoryManagmentProcess(
         data=data_recv,

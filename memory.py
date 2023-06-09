@@ -33,6 +33,7 @@ class PrioritizedReplayBuffer:
         self.actions[self.write_idx] = action
         self.terminated[self.write_idx] = terminated
 
+        self.write_idx += 1
         if self.write_idx == self.buffer_size:
             self.write_idx = 0
 
@@ -112,6 +113,9 @@ class SumTree:
         self._propagate(idx, change)
 
     def get(self, sumcum):
+        if sumcum >= self.sumcum:
+            return None
+
         idx = self._retrieve(0, sumcum)
         data_idx = idx - self.capacity + 1
         return idx, self.nodes[idx], self.data[data_idx]
