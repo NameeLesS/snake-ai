@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 from torch import nn
+import torchvision.transforms.functional as F
+import torchvision.transforms.transforms as T
 from torch.multiprocessing import (
     Process,
     Value,
@@ -23,7 +25,7 @@ import os
 STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 
 # Training constants
-LR = 1e-4
+LR = 1e-6
 GAMMA = 0.99
 BATCH_SIZE = 64
 EPOCHS = 50000
@@ -84,10 +86,7 @@ class TrainingProcess:
         rewards = rewards.to(self.device)
         terminated = terminated.to(self.device)
 
-        try:
-            q_values = self.predict_network(states).gather(1, actions)
-        except Exception as e:
-            traceback.print_exc()
+        q_values = self.predict_network(states).gather(1, actions)
 
         with torch.no_grad():
             next_state_q_values = self.target_network(next_states).max(axis=1)[0]
@@ -117,16 +116,15 @@ class TrainingProcess:
 
                 tree_idxs, td_error, loss = self.training_step(gamma, sample)
 
-                print(
-                    f'Loss: {loss} '
-                    f'Average rewards: {self.metrics[0]} '
-                    f'Average episode length: {self.metrics[1]}')
-                print(
-                    f'Highest reward: {self.metrics[2]} '
-                    f'Longest episode: {self.metrics[3]}')
-
                 if epoch % TARGET_UPDATE_FREQUENCY == 0:
                     self.target_network.load_state_dict(self.predict_network.state_dict())
+                    print(
+                        f'Loss: {loss} '
+                        f'Average rewards: {self.metrics[0]} '
+                        f'Average episode length: {self.metrics[1]}')
+                    print(
+                        f'Highest reward: {self.metrics[2]} '
+                        f'Longest episode: {self.metrics[3]}')
 
                 self.data_updates.send({'idxs': tree_idxs, 'priorities': td_error.detach()})
                 self.loss.send(loss)
@@ -258,7 +256,7 @@ class DataCollectionProcess(Process):
 
     def init(self):
         self.predict_network = DQN().to(self.device)
-        self.game = GameEnviroment(SCREEN_SIZE, FPS, False)
+        self.game = GameEnviroment(size=SCREEN_SIZE, fps=FPS, fps_limit=False, training_mode=True)
         self.game.execute()
 
     def epsilon_greedy_policy(self, epsilon, state):
@@ -286,9 +284,12 @@ class DataCollectionProcess(Process):
         data = (state, next_state, action, reward, terminated)
         return data
 
-    def preprocess_state(self, state):
-        state = torch.tensor(state).unsqueeze(0).unsqueeze(0)
-        state = torch.nn.functional.interpolate(state, INPUT_SIZE[1:3])
+    @staticmethod
+    def preprocess_state(state):
+        state = F.to_pil_image(state)
+        state = F.to_grayscale(state)
+        state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.NEAREST_EXACT)
+        state = F.pil_to_tensor(state)
         state = state.squeeze().reshape((1, *INPUT_SIZE))
         return state
 
@@ -362,7 +363,7 @@ def main():
         device=device,
         data_collection_lock=data_collection_lock,
         terminated=terminated
-    ) for _ in range(torch.multiprocessing.cpu_count())]
+    ) for _ in range(1)] # torch.multiprocessing.cpu_count()
 
     memory_managment_process = MemoryManagmentProcess(
         data=data_recv,

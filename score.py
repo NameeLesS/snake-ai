@@ -4,14 +4,16 @@ from config import *
 
 
 class Score:
-    def __init__(self, font_size):
+    def __init__(self, font_size, display=True):
         self._score = 0
         self.font = pygame.font.SysFont('Impact', font_size)
+        self.display = display
 
     def draw(self, surface):
-        text = self.font.render(str(self._score), True, (255, 255, 255))
-        text_rect = text.get_rect(center=(SCREEN_SIZE[0] / 2, 20))
-        surface.blit(text, text_rect)
+        if self.display:
+            text = self.font.render(str(self._score), True, (255, 255, 255))
+            text_rect = text.get_rect(center=(SCREEN_SIZE[0] / 2, 20))
+            surface.blit(text, text_rect)
 
     def add_score(self, value):
         self._score += value

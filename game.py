@@ -1,5 +1,4 @@
 import pygame
-import numpy as np
 import os
 
 from pygame.locals import *
@@ -14,6 +13,7 @@ class Game:
         self._running = True
         self._display_surf = None
         self._clock = None
+        self._human_mode = True
         self.fps = fps
         self.fps_limit = fps_limit
         self.size = size
@@ -49,7 +49,7 @@ class Game:
     def render(self):
         self.snake.draw(self._display_surf)
         self.point_group.draw(self._display_surf)
-        # self.score.draw(self._display_surf)
+        self.score.draw(self._display_surf)
 
     def cleanup(self):
         pygame.quit()
@@ -84,7 +84,7 @@ class Game:
         self.point = Point(POINT_COLOR, POINT_WIDTH, POINT_HEIGHT)
         self.point_group.add(self.point)
         self.point.new_position()
-        self.score = Score(30)
+        self.score = Score(30, self._human_mode)
         self.terminate = False
 
     def _score(self):
@@ -95,9 +95,12 @@ class Game:
 
 
 class GameEnviroment(Game):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, training_mode=True, *args, **kwargs):
         super(GameEnviroment, self).__init__(*args, **kwargs)
-        os.environ["SDL_VIDEODRIVER"] = "dummy"
+        self._human_mode = False
+        self.training_mode = training_mode
+        if training_mode:
+            os.environ["SDL_VIDEODRIVER"] = "dummy"
 
     def step(self, action):
         score_beofre = self.score.score
@@ -125,9 +128,7 @@ class GameEnviroment(Game):
             self._running = False
 
     def get_state(self):
-        surface = pygame.surfarray.array3d(self._display_surf)
-        surface = np.dot(surface[:, :, :], [0.216, 0.587, 0.144])
-        return surface
+        return pygame.surfarray.array3d(self._display_surf)
 
     def _do_action(self, action):
         actions = {
