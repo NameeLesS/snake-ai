@@ -43,7 +43,8 @@ class TrainMatrics:
 
     @property
     def average_rewards(self):
-        return sum(self._episode_rewards) / len(self._episode_rewards) if len(self._episode_rewards) else 0
+        episodes = self._episode_rewards[-1000:]
+        return sum(episodes) / len(episodes) if len(self._episode_rewards) else 0
 
     @property
     def loss(self):
@@ -51,7 +52,8 @@ class TrainMatrics:
 
     @property
     def average_episode_length(self):
-        return sum(self._episode_lengths) / len(self._episode_lengths) if len(self.episode_lengths) else 0
+        episodes = self._episode_lengths[-1000:]
+        return sum(episodes) / len(episodes) if len(self.episode_lengths) else 0
 
     @property
     def episode_lengths(self):

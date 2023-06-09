@@ -27,14 +27,14 @@ STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 # Training constants
 LR = 1e-6
 GAMMA = 0.99
-BATCH_SIZE = 64
-EPOCHS = 50000
-TARGET_UPDATE_FREQUENCY = 2000
+BATCH_SIZE = 32
+EPOCHS = 200000
+TARGET_UPDATE_FREQUENCY = 10000
 STEPS = 4
-DECAY_RATE_CHANGE = 7e-6
+DECAY_RATE_CHANGE = 1
 
 # Memory constants
-MEMORY_SIZE = 100000
+MEMORY_SIZE = 50000
 ALPHA = 0.9
 BETA = 0.4
 
@@ -101,20 +101,22 @@ class TrainingProcess:
         torch.nn.utils.clip_grad_value_(self.predict_network.parameters(), 100)
         self.optimizer.step()
 
-        return tree_idxs, td_error, loss.item()
+        return tree_idxs, td_error.detach(), loss.detach().item()
 
     def training_loop(self, epochs, batch_size, gamma):
         while int(self.memory_size.value) < batch_size:
             pass
 
+        self.load_model()
+
         for epoch in range(epochs):
-            print(f'======== {epoch + 1}/{epochs} epoch ========')
+            # print(f'======== {epoch + 1}/{epochs} epoch ========')
             self.sample_request_event.set()
             if self.samples.poll(timeout=999):
-                sample = self.samples.recv()
                 self.sample_request_event.clear()
-
+                sample = self.samples.recv()
                 tree_idxs, td_error, loss = self.training_step(gamma, sample)
+                # print(f'Loss: {loss}')
 
                 if epoch % TARGET_UPDATE_FREQUENCY == 0:
                     self.target_network.load_state_dict(self.predict_network.state_dict())
@@ -126,7 +128,7 @@ class TrainingProcess:
                         f'Highest reward: {self.metrics[2]} '
                         f'Longest episode: {self.metrics[3]}')
 
-                self.data_updates.send({'idxs': tree_idxs, 'priorities': td_error.detach()})
+                self.data_updates.send({'idxs': tree_idxs, 'priorities': td_error})
                 self.loss.send(loss)
                 self.network.send({
                     'epoch': epoch,
@@ -178,7 +180,7 @@ class MemoryManagmentProcess(Process):
     def init(self):
         self.memory = PrioritizedReplayBuffer(
             buffer_size=MEMORY_SIZE,
-            state_dim=INPUT_SIZE,
+            state_dim=STATE_DIM,
             action_dim=(1),
             alpha=ALPHA,
             beta=BETA
@@ -286,11 +288,9 @@ class DataCollectionProcess(Process):
 
     @staticmethod
     def preprocess_state(state):
-        state = F.to_pil_image(state)
-        state = F.to_grayscale(state)
-        state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.NEAREST_EXACT)
-        state = F.pil_to_tensor(state)
-        state = state.squeeze().reshape((1, *INPUT_SIZE))
+        state = np.dot(state[:, :, :], [0.216, 0.587, 0.144])
+        state = torch.tensor(state)
+        state = state.squeeze().reshape((1, *STATE_DIM))
         return state
 
     def collect_data(self, steps):
@@ -298,10 +298,10 @@ class DataCollectionProcess(Process):
         if self.network.poll(timeout=999):
             network = self.network.recv()
             self.data_collection_lock.release()
-            print(f"Running data collection for epoch: {network['epoch']}")
+            # print(f"Running data collection for epoch: {network['epoch']}")
             self.predict_network.load_state_dict(network['network'])
             for step in range(steps):
-                epsilon = 1 * (1 - DECAY_RATE_CHANGE) ** network['epoch']
+                epsilon = 1 * ((1 - float(network['epoch']) / EPOCHS) ** DECAY_RATE_CHANGE)
                 data = self.do_one_step(epsilon)
                 self.data.send(data)
 
@@ -319,6 +319,7 @@ class DataCollectionProcess(Process):
 
 
 def main():
+    torch.autograd.set_detect_anomaly(True)
     torch.multiprocessing.set_start_method('spawn', force=True)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
