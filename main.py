@@ -2,9 +2,10 @@ import argparse
 import torch
 import os
 
+import torchvision.transforms.functional as F
+import torchvision.transforms.transforms as T
 
 from game import Game, GameEnviroment
-from distributed import DataCollectionProcess
 from network import DQN
 from config import *
 
@@ -16,7 +17,11 @@ def load_model(model_path):
 
 
 def do_one_step(game, model):
-    state = DataCollectionProcess.preprocess_state(game.get_state()).to(torch.float32)
+    state = F.to_pil_image(game.get_state())
+    state = F.to_grayscale(state)
+    state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.NEAREST_EXACT)
+    state = F.pil_to_tensor(state)
+    state = state.squeeze().reshape((1, *INPUT_SIZE)).to(torch.float32)
 
     model.eval()
     with torch.no_grad():
@@ -35,7 +40,6 @@ def main():
         model = load_model('/home/nameless/Downloads/')
         while True:
             do_one_step(game, model)
-
     else:
         game = Game(size=SCREEN_SIZE, fps=FPS)
         game.execute()

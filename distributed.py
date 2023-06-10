@@ -46,6 +46,7 @@ class TrainingProcess:
             self,
             predict_network,
             target_network,
+            optimizer,
             device,
             metrics,
             network,
@@ -71,8 +72,7 @@ class TrainingProcess:
         self.terminated = terminated
         self.model_path = model_path
         self.save_path = save_path
-
-        self.optimizer = torch.optim.AdamW(self.predict_network.parameters(), lr=LR, amsgrad=True)
+        self.optimizer = optimizer
 
     def training_step(self, gamma, sample):
         self.predict_network.train()
@@ -85,6 +85,7 @@ class TrainingProcess:
         actions = actions.to(torch.int64).to(self.device)
         rewards = rewards.to(self.device)
         terminated = terminated.to(self.device)
+        weights = weights.to(self.device)
 
         q_values = self.predict_network(states).gather(1, actions)
 
@@ -92,8 +93,9 @@ class TrainingProcess:
             next_state_q_values = self.target_network(next_states).max(axis=1)[0]
         target_q_values = rewards + (1 - terminated) * gamma * next_state_q_values
 
-        huber = nn.SmoothL1Loss(reduce=lambda x: torch.mean(x * weights))
-        loss = huber(q_values, target_q_values.unsqueeze(1))
+        huber = nn.SmoothL1Loss(reduction='none')
+        loss = huber(q_values, target_q_values.unsqueeze(1)).to(self.device)
+        loss = torch.mean(loss * weights)
         td_error = torch.abs(q_values.squeeze(1) - target_q_values)
 
         self.optimizer.zero_grad()
@@ -110,7 +112,6 @@ class TrainingProcess:
         self.load_model()
 
         for epoch in range(epochs):
-            print(f'======== {epoch + 1}/{epochs} epoch ========')
             self.sample_request_event.set()
             if self.samples.poll(timeout=999):
                 self.sample_request_event.clear()
@@ -286,13 +287,13 @@ class DataCollectionProcess(Process):
         data = (state, next_state, action, reward, terminated)
         return data
 
-    @staticmethod
-    def preprocess_state(state):
-        state = F.to_pil_image(state)
-        state = F.to_grayscale(state)
-        state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.NEAREST_EXACT)
-        state = F.pil_to_tensor(state)
-        state = state.squeeze().reshape((1, *INPUT_SIZE))
+    def preprocess_state(self, state):
+        with torch.no_grad():
+            state = F.to_pil_image(state)
+            state = F.to_grayscale(state)
+            state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.NEAREST_EXACT)
+            state = F.pil_to_tensor(state)
+            state = state.squeeze().reshape((1, *INPUT_SIZE))
         return state
 
     def collect_data(self, steps):
@@ -326,6 +327,7 @@ def main():
     predict_network = DQN().to(device)
     target_network = DQN().to(device)
     target_network.load_state_dict(predict_network.state_dict())
+    optimizer = torch.optim.AdamW(predict_network.parameters(), lr=LR, amsgrad=True)
 
     metrics = Array('d', 4)
     network_recv, network_sender = Pipe()
@@ -346,6 +348,7 @@ def main():
     training_process = TrainingProcess(
         predict_network=predict_network,
         target_network=target_network,
+        optimizer=optimizer,
         device=device,
         network=network_sender,
         data_updates=data_updated_sender,
