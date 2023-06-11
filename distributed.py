@@ -103,7 +103,8 @@ class TrainingProcess:
         torch.nn.utils.clip_grad_value_(self.predict_network.parameters(), 100)
         self.optimizer.step()
 
-        return tree_idxs, td_error.detach(), loss.detach().item()
+        td_error, loss = td_error.detach(), loss.detach().item()
+        return tree_idxs, td_error, loss
 
     def training_loop(self, epochs, batch_size, gamma):
         while int(self.memory_size.value) < batch_size:
@@ -201,8 +202,7 @@ class MemoryManagmentProcess(Process):
 
     def send_sample(self):
         if self.sample_request_event.is_set():
-            sample = self.memory.sample(BATCH_SIZE)
-            self.samples.send(sample)
+            self.samples.send(self.memory.sample(BATCH_SIZE))
 
     def update_metrics(self):
         if self.loss.poll():
@@ -282,18 +282,17 @@ class DataCollectionProcess(Process):
 
         reward = torch.tensor(reward)
         terminated = torch.tensor(terminated)
-        next_state = self.preprocess_state(next_state).to(self.device)
+        next_state = self.preprocess_state(next_state)
 
         data = (state, next_state, action, reward, terminated)
         return data
 
     def preprocess_state(self, state):
-        with torch.no_grad():
-            state = F.to_pil_image(state)
-            state = F.to_grayscale(state)
-            state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.NEAREST_EXACT)
-            state = F.pil_to_tensor(state)
-            state = state.squeeze().reshape((1, *INPUT_SIZE))
+        state = F.to_pil_image(state)
+        state = F.to_grayscale(state)
+        state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.BICUBIC)
+        state = F.pil_to_tensor(state)
+        state = state.squeeze().reshape((1, *INPUT_SIZE))
         return state
 
     def collect_data(self, steps):
@@ -304,8 +303,7 @@ class DataCollectionProcess(Process):
             self.predict_network.load_state_dict(network['network'])
             for step in range(steps):
                 epsilon = 1 * ((1 - float(network['epoch']) / EPOCHS) ** DECAY_RATE_CHANGE)
-                data = self.do_one_step(epsilon)
-                self.data.send(data)
+                self.data.send(self.do_one_step(epsilon))
 
     def run(self):
         self.init()

@@ -4,11 +4,11 @@ from body import Body
 
 
 class Snake:
-    def __init__(self, color, width, height, position):
+    def __init__(self, color, head_color, width, height, position):
         self.color = color
         self.width, self.height = width, height
         self.snake_group = pygame.sprite.Group()
-        self.head = Body(color, width, height, position, head=True)
+        self.head = Body(color, head_color, width, height, position, head=True)
         self.head._owner = self
         self.snake_group.add(self.head)
         self.movement_coordinates = []
@@ -33,7 +33,7 @@ class Snake:
         l_position, l_direction = last_snake.position, last_snake.direction
         n_position = l_position - l_direction
 
-        body = Body(self.color, self.width, self.height, n_position, False)
+        body = Body(self.color, None, self.width, self.height, n_position, False)
         body.direction = l_direction
         body._owner = self
         self.snake_group.add(body)

@@ -76,6 +76,7 @@ class Game:
 
     def restart(self):
         self.snake = Snake(SNAKE_BODY_COLOR,
+                           SNAKE_HEAD_COLOR,
                            SNAKE_WIDTH,
                            SNAKE_HEIGHT,
                            pygame.Vector2(10, 10))

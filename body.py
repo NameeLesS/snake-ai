@@ -6,7 +6,7 @@ import sys
 
 
 class Body(pygame.sprite.Sprite):
-    def __init__(self, color, width, height, position, head=False):
+    def __init__(self, color, head_color, width, height, position, head=False):
         super().__init__()
         self._owner = None
         self.head = head
@@ -14,6 +14,9 @@ class Body(pygame.sprite.Sprite):
         self.direction_v = 'left'
         self.position = position
         self.collides = False
+
+        if self.head:
+            color = head_color
 
         self.image = pygame.Surface([width, height])
         # Body
