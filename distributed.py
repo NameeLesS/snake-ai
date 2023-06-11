@@ -29,7 +29,7 @@ LR = 1e-4
 GAMMA = 0.99
 BATCH_SIZE = 8
 EPOCHS = 200000
-TARGET_UPDATE_FREQUENCY = 5000
+TARGET_UPDATE_FREQUENCY = 2000
 STEPS = 4
 DECAY_RATE_CHANGE = 1
 
@@ -103,8 +103,7 @@ class TrainingProcess:
         torch.nn.utils.clip_grad_value_(self.predict_network.parameters(), 100)
         self.optimizer.step()
 
-        td_error, loss = td_error.detach(), loss.detach().item()
-        return tree_idxs, td_error, loss
+        return tree_idxs, td_error.detach(), loss.detach().item()
 
     def training_loop(self, epochs, batch_size, gamma):
         while int(self.memory_size.value) < batch_size:
@@ -288,11 +287,12 @@ class DataCollectionProcess(Process):
         return data
 
     def preprocess_state(self, state):
-        state = F.to_pil_image(state)
-        state = F.to_grayscale(state)
-        state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.BICUBIC)
-        state = F.pil_to_tensor(state)
-        state = state.squeeze().reshape((1, *INPUT_SIZE))
+        with torch.no_grad():
+            state = F.to_pil_image(state)
+            state = F.to_grayscale(state)
+            state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.BILINEAR)
+            state = F.pil_to_tensor(state)
+            state = state.squeeze().reshape((1, *INPUT_SIZE))
         return state
 
     def collect_data(self, steps):
