@@ -31,6 +31,9 @@ class TrainMatrics:
             self._episode_rewards.extend(list(map(lambda series: np.sum(series, 0)[0], reward_series)))
 
     def save(self, path, name):
+        if not os.path.exists(path):
+            os.makedirs(path)
+
         save_path = os.path.join(path, f'{name}.pkl')
         data = {
             'rewards': self._episode_rewards,

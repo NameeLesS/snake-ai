@@ -1,6 +1,8 @@
 import random
 import torch
 import numpy as np
+import os
+import pickle
 
 
 class PrioritizedReplayBuffer:
@@ -81,6 +83,74 @@ class PrioritizedReplayBuffer:
             priority = (priority + self.eps) ** self.alpha
             self.tree.update(idx, priority)
             self.max_prority = max(self.max_prority, priority)
+
+    def save_experience(self, destination=''):
+        if not os.path.exists(destination):
+            os.makedirs(destination)
+
+        with open(os.path.join(destination, 'data.pt'), 'wb+') as f:
+            torch.save({
+                'states': self.states,
+                'rewards': self.rewards,
+                'next_states': self.next_states,
+                'actions': self.actions,
+                'terminated': self.terminated,
+                'size': self.size
+            }, f)
+
+        with open(os.path.join(destination, 'meta.pkl'), 'wb+') as f:
+            pickle.dump({
+                'nodes': self.tree.nodes,
+                'data': self.tree.data,
+                'size': self.tree.size,
+                'capacity': self.tree.capacity
+            }, f)
+
+    def load_experience(self, destination='', data_file='data.pt', meta_file='meta.pkl'):
+        if (
+                not os.path.exists(os.path.join(destination, data_file)) or
+                not os.path.exists(os.path.join(destination, meta_file))
+        ):
+            print('Data not found')
+            return
+
+        with open(os.path.join(destination, data_file), 'rb+') as f:
+            data = torch.load(f)
+
+            # cut the data which is redundant
+            size = data['size']
+            if size > self.buffer_size:
+                size = self.buffer_size
+
+            # set write index to write new data at the end of the buffer
+            if size < self.buffer_size:
+                self.write_idx = size
+
+            self.states[:size] = data['states'][:size]
+            self.next_states[:size] = data['next_states'][:size]
+            self.rewards[:size] = data['rewards'][:size]
+            self.actions[:size] = data['actions'][:size]
+            self.terminated[:size] = data['terminated'][:size]
+            self.size = size
+
+        with open(os.path.join(destination, meta_file), 'rb+') as f:
+            meta = pickle.load(f)
+            size = meta['size']
+            capacity = meta['capacity']
+
+            # cut the data which is redundant
+            if size > self.buffer_size:
+                size = self.buffer_size
+
+            if capacity > self.buffer_size:
+                capacity = self.buffer_size
+
+            # set write index to write new data at the end of the tree
+            if size < self.buffer_size:
+                self.tree.last_idx = size
+
+            self.tree.nodes[:capacity * 2 - 1] = meta['nodes'][:capacity * 2 - 1]
+            self.tree.data[:size] = meta['data'][:size]
 
     def __len__(self):
         return self.size

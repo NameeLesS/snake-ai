@@ -34,7 +34,7 @@ STEPS = 4
 DECAY_RATE_CHANGE = 0.01
 
 # Memory constants
-MEMORY_SIZE = 1000
+MEMORY_SIZE = 200
 ALPHA = 0.9
 BETA = 0.4
 
@@ -186,6 +186,7 @@ class MemoryManagmentProcess(Process):
             alpha=ALPHA,
             beta=BETA
         )
+        self.memory.load_experience(destination=self.save_path)
 
         self.metrics = TrainMatrics()
 
@@ -214,10 +215,9 @@ class MemoryManagmentProcess(Process):
         self.metrics_summary[2] = self.metrics.highest_reward
         self.metrics_summary[3] = self.metrics.longest_episode
 
-    def save_metrics(self):
-        if not os.path.exists(self.save_path):
-            os.makedirs(self.save_path)
+    def save_state(self):
         self.metrics.save(self.save_path, 'metrics')
+        self.memory.save_experience(self.save_path)
 
     def run(self):
         self.init()
@@ -235,8 +235,8 @@ class MemoryManagmentProcess(Process):
 
         except (Exception, KeyboardInterrupt) as e:
             traceback.print_exc()
-            self.save_metrics()
-        self.save_metrics()
+            self.save_state()
+        self.save_state()
 
 
 class DataCollectionProcess(Process):
@@ -376,7 +376,7 @@ def main():
         sample_request_event=sample_request_event,
         loss=loss_recv,
         metrics=metrics,
-        save_path='backups/metrics/',
+        save_path='backups/data/',
         terminated=terminated
     )
 
