@@ -7,15 +7,12 @@ class DQN(nn.Module):
         self.model = nn.Sequential(
             nn.Conv2d(in_channels=1, out_channels=32, kernel_size=(8, 8), stride=(4, 4)),
             nn.LeakyReLU(),
-            # nn.MaxPool2d(3),
 
             nn.Conv2d(in_channels=32, out_channels=64, kernel_size=(3, 3), stride=(2, 2)),
             nn.LeakyReLU(),
-            # nn.MaxPool2d(3),
 
             nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(3, 3), stride=(1, 1)),
             nn.LeakyReLU(),
-            # nn.MaxPool2d(3),
 
             nn.Flatten(),
 
@@ -25,6 +22,5 @@ class DQN(nn.Module):
         )
 
     def forward(self, x):
-        x = x / 255
         x = self.model(x)
         return x

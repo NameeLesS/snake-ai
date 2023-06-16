@@ -19,7 +19,7 @@ def load_model(model_path):
 def do_one_step(game, model):
     state = F.to_pil_image(game.get_state())
     state = F.to_grayscale(state)
-    state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.NEAREST_EXACT)
+    state = F.resize(state, INPUT_SIZE[1:3], interpolation=T.InterpolationMode.BILINEAR)
     state = F.pil_to_tensor(state)
     state = state.squeeze().reshape((1, *INPUT_SIZE)).to(torch.float32)
 
@@ -37,7 +37,7 @@ def main():
     if args.model:
         game = GameEnviroment(size=SCREEN_SIZE, fps=FPS, training_mode=False)
         game.execute()
-        model = load_model('/home/nameless/Downloads/')
+        model = load_model('backups/models/')
         while True:
             do_one_step(game, model)
     else:

@@ -31,7 +31,7 @@ BATCH_SIZE = 8
 EPOCHS = 200000
 TARGET_UPDATE_FREQUENCY = 2000
 STEPS = 4
-DECAY_RATE_CHANGE = 1
+DECAY_RATE_CHANGE = 0.01
 
 # Memory constants
 MEMORY_SIZE = 1000
@@ -80,21 +80,21 @@ class TrainingProcess:
 
         batch, weights, tree_idxs = sample
         states, next_states, actions, rewards, terminated = batch
-        states = states.to(torch.float32).to(self.device)
-        next_states = next_states.to(torch.float32).to(self.device)
-        actions = actions.to(torch.int64).to(self.device)
-        rewards = rewards.to(self.device)
-        terminated = terminated.to(self.device)
-        weights = weights.to(self.device)
+        states = states.to(torch.float32).to(self.device).detach()
+        next_states = next_states.to(torch.float32).to(self.device).detach()
+        actions = actions.to(torch.int64).to(self.device).detach()
+        rewards = rewards.to(self.device).detach()
+        terminated = terminated.to(self.device).detach()
+        weights = weights.to(self.device).detach()
 
-        q_values = self.predict_network(states).gather(1, actions)
+        q_values = self.predict_network(states / 255).gather(1, actions)
 
         with torch.no_grad():
-            next_state_q_values = self.target_network(next_states).max(axis=1)[0]
+            next_state_q_values = self.target_network(next_states / 255).max(axis=1)[0]
         target_q_values = rewards + (1 - terminated) * gamma * next_state_q_values
 
         huber = nn.SmoothL1Loss(reduction='none')
-        loss = huber(q_values, target_q_values.unsqueeze(1)).to(self.device)
+        loss = huber(q_values, target_q_values.unsqueeze(1))
         loss = torch.mean(loss * weights)
         td_error = torch.abs(q_values.squeeze(1) - target_q_values)
 
@@ -103,7 +103,7 @@ class TrainingProcess:
         torch.nn.utils.clip_grad_value_(self.predict_network.parameters(), 100)
         self.optimizer.step()
 
-        return tree_idxs, td_error.detach(), loss.detach().item()
+        return tree_idxs, td_error, loss
 
     def training_loop(self, epochs, batch_size, gamma):
         while int(self.memory_size.value) < batch_size:
@@ -117,6 +117,7 @@ class TrainingProcess:
                 self.sample_request_event.clear()
                 sample = self.samples.recv()
                 tree_idxs, td_error, loss = self.training_step(gamma, sample)
+                del sample
 
                 if epoch % TARGET_UPDATE_FREQUENCY == 0:
                     self.target_network.load_state_dict(self.predict_network.state_dict())
@@ -128,8 +129,8 @@ class TrainingProcess:
                         f'Highest reward: {self.metrics[2]} '
                         f'Longest episode: {self.metrics[3]}')
 
-                self.data_updates.send({'idxs': tree_idxs, 'priorities': td_error})
-                self.loss.send(loss)
+                self.data_updates.send({'idxs': tree_idxs, 'priorities': td_error.detach()})
+                self.loss.send(loss.detach().item())
                 self.network.send({
                     'epoch': epoch,
                     'network': self.predict_network.state_dict()
