@@ -131,10 +131,6 @@ class TrainingProcess:
 
                 self.data_updates.send({'idxs': tree_idxs, 'priorities': td_error.detach()})
                 self.loss.send(loss.detach().item())
-                self.network.send({
-                    'epoch': epoch,
-                    'network': self.predict_network.state_dict()
-                })
         self.terminated.value = True
         self.save_model()
 
@@ -182,7 +178,7 @@ class MemoryManagmentProcess(Process):
         self.memory = PrioritizedReplayBuffer(
             buffer_size=MEMORY_SIZE,
             state_dim=INPUT_SIZE,
-            action_dim=(1),
+            action_dim=1,
             alpha=ALPHA,
             beta=BETA
         )
@@ -242,15 +238,14 @@ class MemoryManagmentProcess(Process):
 class DataCollectionProcess(Process):
     def __init__(
             self,
-            network,
+            predict_network,
             data,
             device,
             data_collection_lock,
             terminated
     ):
         Process.__init__(self)
-        self.predict_network = None
-        self.network = network
+        self.predict_network = predict_network
         self.data = data
         self.terminated = terminated
         self.device = device
@@ -258,7 +253,6 @@ class DataCollectionProcess(Process):
         self.game = None
 
     def init(self):
-        self.predict_network = DQN().to(self.device)
         self.game = GameEnviroment(size=SCREEN_SIZE, fps=FPS, fps_limit=False, training_mode=True)
         self.game.execute()
 
@@ -274,7 +268,7 @@ class DataCollectionProcess(Process):
             return torch.argmax(action).to(torch.int)
 
     def do_one_step(self, epsilon):
-        state = self.preprocess_state(self.game.get_state()).to(torch.float32).to(self.device)
+        state = self._preprocess_state(self.game.get_state()).to(torch.float32).to(self.device)
 
         action = self.epsilon_greedy_policy(epsilon, state)
 
@@ -282,12 +276,12 @@ class DataCollectionProcess(Process):
 
         reward = torch.tensor(reward)
         terminated = torch.tensor(terminated)
-        next_state = self.preprocess_state(next_state)
+        next_state = self._preprocess_state(next_state)
 
         data = (state, next_state, action, reward, terminated)
         return data
 
-    def preprocess_state(self, state):
+    def _preprocess_state(self, state):
         with torch.no_grad():
             state = F.to_pil_image(state)
             state = F.to_grayscale(state)
@@ -296,26 +290,26 @@ class DataCollectionProcess(Process):
             state = state.squeeze().reshape((1, *INPUT_SIZE))
         return state
 
-    def collect_data(self, steps):
-        self.data_collection_lock.acquire()
-        if self.network.poll(timeout=999):
-            network = self.network.recv()
-            self.data_collection_lock.release()
-            self.predict_network.load_state_dict(network['network'])
-            for step in range(steps):
-                epsilon = 1 * ((1 - float(network['epoch']) / EPOCHS) ** DECAY_RATE_CHANGE)
-                self.data.send(self.do_one_step(epsilon))
+    def _get_epsilon(self, epoch):
+        return 1 - 1 * ((1 - float(epoch) / EPOCHS) ** DECAY_RATE_CHANGE)
+
+    def collect_data(self, steps, epoch):
+        for step in range(steps):
+            epsilon = self._get_epsilon(epoch)
+            self.data.send(self.do_one_step(epsilon))
 
     def run(self):
+        i = 0
         self.init()
-        self.collect_data(200)
+        self.collect_data(200, i)
         try:
             while True:
                 if self.terminated.value:
                     break
 
-                self.collect_data(STEPS)
-        except:
+                self.collect_data(STEPS, i)
+                i += 1
+        except Exception:
             traceback.print_exc()
 
 
@@ -327,9 +321,9 @@ def main():
     target_network = DQN().to(device)
     target_network.load_state_dict(predict_network.state_dict())
     optimizer = torch.optim.AdamW(predict_network.parameters(), lr=LR, amsgrad=True)
+    predict_network.share_memory()
 
     metrics = Array('d', 4)
-    network_recv, network_sender = Pipe()
     data_recv, data_sender = Pipe()
     data_updates_recv, data_updated_sender = Pipe()
     samples_recv, samples_sender = Pipe()
@@ -339,17 +333,11 @@ def main():
     terminated = Value('b', False)
     memory_size = Value('i', 0)
 
-    network_sender.send({
-        'epoch': 0,
-        'network': predict_network.state_dict()
-    })
-
     training_process = TrainingProcess(
         predict_network=predict_network,
         target_network=target_network,
         optimizer=optimizer,
         device=device,
-        network=network_sender,
         data_updates=data_updated_sender,
         samples=samples_recv,
         memory_size=memory_size,
@@ -361,12 +349,12 @@ def main():
     )
 
     data_collection_processes = [DataCollectionProcess(
-        network=network_recv,
+        predict_network=predict_network,
         data=data_sender,
         device=device,
         data_collection_lock=data_collection_lock,
         terminated=terminated
-    ) for _ in range(2)] # torch.multiprocessing.cpu_count()
+    ) for _ in range(2)]  # torch.multiprocessing.cpu_count()
 
     memory_managment_process = MemoryManagmentProcess(
         data=data_recv,
