@@ -44,19 +44,17 @@ class TrainMatrics:
         with open(save_path, 'wb+') as f:
             pickle.dump(data, f)
 
-    @property
-    def average_rewards(self):
-        episodes = self._episode_rewards[-1000:]
+    def average_rewards(self, length):
+        episodes = self._episode_rewards[-length:]
         return sum(episodes) / len(episodes) if len(self._episode_rewards) else 0
+
+    def average_episode_length(self, length):
+        episodes = self._episode_lengths[-length:]
+        return sum(episodes) / len(episodes) if len(self.episode_lengths) else 0
 
     @property
     def loss(self):
         return self.losses[-1] if len(self.losses) else 0
-
-    @property
-    def average_episode_length(self):
-        episodes = self._episode_lengths[-1000:]
-        return sum(episodes) / len(episodes) if len(self.episode_lengths) else 0
 
     @property
     def episode_lengths(self):

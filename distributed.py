@@ -28,10 +28,11 @@ STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 LR = 1e-4
 GAMMA = 0.99
 BATCH_SIZE = 8
-EPOCHS = 200000
-TARGET_UPDATE_FREQUENCY = 2000
+EPOCHS = 100000
+TARGET_UPDATE_FREQUENCY = 50
 STEPS = 4
-DECAY_RATE_CHANGE = 0.01
+DECAY_RATE_CHANGE = 5
+MAX_EPSILON = .95
 
 # Memory constants
 MEMORY_SIZE = 200
@@ -48,8 +49,8 @@ class TrainingProcess:
             target_network,
             optimizer,
             device,
+            epoch,
             metrics,
-            network,
             data_updates,
             samples,
             memory_size,
@@ -63,12 +64,12 @@ class TrainingProcess:
         self.target_network = target_network
         self.device = device
         self.metrics = metrics
-        self.network = network
         self.data_updates = data_updates
         self.samples = samples
         self.memory_size = memory_size
         self.sample_request_event = sample_request_event
         self.loss = loss
+        self.epoch = epoch
         self.terminated = terminated
         self.model_path = model_path
         self.save_path = save_path
@@ -112,6 +113,7 @@ class TrainingProcess:
         self.load_model()
 
         for epoch in range(epochs):
+            self.epoch.value = epoch
             self.sample_request_event.set()
             if self.samples.poll(timeout=999):
                 self.sample_request_event.clear()
@@ -122,6 +124,7 @@ class TrainingProcess:
                 if epoch % TARGET_UPDATE_FREQUENCY == 0:
                     self.target_network.load_state_dict(self.predict_network.state_dict())
                     print(
+                        f'UPDATE [{epoch // TARGET_UPDATE_FREQUENCY}] '
                         f'Loss: {loss} '
                         f'Average rewards: {self.metrics[0]} '
                         f'Average episode length: {self.metrics[1]}')
@@ -206,8 +209,8 @@ class MemoryManagmentProcess(Process):
             self.metrics.push_loss(self.loss.recv())
 
         self.metrics.calculate()
-        self.metrics_summary[0] = self.metrics.average_rewards
-        self.metrics_summary[1] = self.metrics.average_episode_length
+        self.metrics_summary[0] = self.metrics.average_rewards(TARGET_UPDATE_FREQUENCY)
+        self.metrics_summary[1] = self.metrics.average_episode_length(TARGET_UPDATE_FREQUENCY)
         self.metrics_summary[2] = self.metrics.highest_reward
         self.metrics_summary[3] = self.metrics.longest_episode
 
@@ -240,6 +243,7 @@ class DataCollectionProcess(Process):
             self,
             predict_network,
             data,
+            epoch,
             device,
             data_collection_lock,
             terminated
@@ -248,6 +252,7 @@ class DataCollectionProcess(Process):
         self.predict_network = predict_network
         self.data = data
         self.terminated = terminated
+        self.epoch = epoch
         self.device = device
         self.data_collection_lock = data_collection_lock
         self.game = None
@@ -291,24 +296,22 @@ class DataCollectionProcess(Process):
         return state
 
     def _get_epsilon(self, epoch):
-        return 1 - 1 * ((1 - float(epoch) / EPOCHS) ** DECAY_RATE_CHANGE)
+        return min(1 - 1 * ((1 - float(epoch) / EPOCHS) ** DECAY_RATE_CHANGE), MAX_EPSILON)
 
-    def collect_data(self, steps, epoch):
+    def collect_data(self, steps):
         for step in range(steps):
-            epsilon = self._get_epsilon(epoch)
+            epsilon = self._get_epsilon(self.epoch.value)
             self.data.send(self.do_one_step(epsilon))
 
     def run(self):
-        i = 0
         self.init()
-        self.collect_data(200, i)
+        self.collect_data(200)
         try:
             while True:
                 if self.terminated.value:
                     break
 
-                self.collect_data(STEPS, i)
-                i += 1
+                self.collect_data(STEPS)
         except Exception:
             traceback.print_exc()
 
@@ -331,6 +334,7 @@ def main():
     sample_request_event = Event()
     data_collection_lock = RLock()
     terminated = Value('b', False)
+    epoch = Value('i', 0)
     memory_size = Value('i', 0)
 
     training_process = TrainingProcess(
@@ -338,6 +342,7 @@ def main():
         target_network=target_network,
         optimizer=optimizer,
         device=device,
+        epoch=epoch,
         data_updates=data_updated_sender,
         samples=samples_recv,
         memory_size=memory_size,
@@ -352,6 +357,7 @@ def main():
         predict_network=predict_network,
         data=data_sender,
         device=device,
+        epoch=epoch,
         data_collection_lock=data_collection_lock,
         terminated=terminated
     ) for _ in range(2)]  # torch.multiprocessing.cpu_count()
