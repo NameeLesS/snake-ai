@@ -197,8 +197,8 @@ class MemoryManagmentProcess(Process):
     def update_data(self):
         if self.data.poll():
             data = self.data.recv()
-            self.memory.add(data)
-            self.metrics.push_reward(data[3], data[4])
+            self.memory.add(data[1])
+            self.metrics.push_reward(data[0], data[1][3], data[1][4])
 
     def send_sample(self):
         if self.sample_request_event.is_set():
@@ -241,6 +241,7 @@ class MemoryManagmentProcess(Process):
 class DataCollectionProcess(Process):
     def __init__(
             self,
+            process_id,
             predict_network,
             data,
             epoch,
@@ -249,6 +250,7 @@ class DataCollectionProcess(Process):
             terminated
     ):
         Process.__init__(self)
+        self.process_id = process_id
         self.predict_network = predict_network
         self.data = data
         self.terminated = terminated
@@ -301,7 +303,7 @@ class DataCollectionProcess(Process):
     def collect_data(self, steps):
         for step in range(steps):
             epsilon = self._get_epsilon(self.epoch.value)
-            self.data.send(self.do_one_step(epsilon))
+            self.data.send((self.process_id, self.do_one_step(epsilon)))
 
     def run(self):
         self.init()
@@ -354,13 +356,14 @@ def main():
     )
 
     data_collection_processes = [DataCollectionProcess(
+        process_id=f'Game-{i}',
         predict_network=predict_network,
         data=data_sender,
         device=device,
         epoch=epoch,
         data_collection_lock=data_collection_lock,
         terminated=terminated
-    ) for _ in range(2)]  # torch.multiprocessing.cpu_count()
+    ) for i in range(2)]  # torch.multiprocessing.cpu_count()
 
     memory_managment_process = MemoryManagmentProcess(
         data=data_recv,
