@@ -66,7 +66,8 @@ class Game:
         self.cleanup()
 
     def loop(self):
-        self.on_event(pygame.event.poll())
+        for event in pygame.event.get():
+            self.on_event(event)
         self.update()
         self._display_surf.fill(BACKGROUND_COLOR)
         self.render()
