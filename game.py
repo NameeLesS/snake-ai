@@ -101,6 +101,7 @@ class GameEnviroment(Game):
         super(GameEnviroment, self).__init__(*args, **kwargs)
         self._human_mode = False
         self.training_mode = training_mode
+        self.moves_since_score = 0
         if training_mode:
             os.environ["SDL_VIDEODRIVER"] = "dummy"
 
@@ -112,12 +113,18 @@ class GameEnviroment(Game):
 
         next_state = self.get_state()
 
+        self.moves_since_score += 1
+        if self.moves_since_score >= 900:
+            self.terminate = True
+            self.moves_since_score = 0
         terminated = self.terminate
+
         if self.terminate:
             self.restart()
 
         if self.score.score - score_beofre > 0:
             reward = self.score.score + 1
+            self.moves_since_score = 0
         elif terminated:
             reward = -1
         else:
