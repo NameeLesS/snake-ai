@@ -66,7 +66,8 @@ class Game:
         self.cleanup()
 
     def loop(self):
-        self.on_event(pygame.event.poll())
+        for event in pygame.event.get():
+            self.on_event(event)
         self.update()
         self._display_surf.fill(BACKGROUND_COLOR)
         self.render()
@@ -100,6 +101,7 @@ class GameEnviroment(Game):
         super(GameEnviroment, self).__init__(*args, **kwargs)
         self._human_mode = False
         self.training_mode = training_mode
+        self.moves_since_score = 0
         if training_mode:
             os.environ["SDL_VIDEODRIVER"] = "dummy"
 
@@ -111,12 +113,18 @@ class GameEnviroment(Game):
 
         next_state = self.get_state()
 
+        self.moves_since_score += 1
+        if self.moves_since_score >= 900:
+            self.terminate = True
+            self.moves_since_score = 0
         terminated = self.terminate
+
         if self.terminate:
             self.restart()
 
         if self.score.score - score_beofre > 0:
-            reward = 5
+            reward = self.score.score + 1
+            self.moves_since_score = 0
         elif terminated:
             reward = -1
         else:

@@ -24,9 +24,9 @@ class Body(pygame.sprite.Sprite):
                          color,
                          pygame.Rect(0, 0, width, height))
         # Border
-        pygame.draw.rect(self.image,
-                         (0, 0, 255),
-                         pygame.Rect(0, 0, width, height), 1)
+        # pygame.draw.rect(self.image,
+        #                  (0, 0, 255),
+        #                  pygame.Rect(0, 0, width, height), 1)
         self.rect = self.image.get_rect()
         self.rect.center = self.position * CELL_SIZE
 
@@ -62,6 +62,7 @@ class Body(pygame.sprite.Sprite):
                 return self.rect.center, pygame.Vector2(1, 0), 'right'
             if event.key == K_LEFT and self.direction_v != 'right':
                 return self.rect.center, pygame.Vector2(-1, 0), 'left'
+        return None
 
     def _move(self):
         self.position += self.direction

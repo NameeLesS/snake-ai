@@ -28,10 +28,11 @@ STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 LR = 1e-4
 GAMMA = 0.99
 BATCH_SIZE = 8
-EPOCHS = 200000
-TARGET_UPDATE_FREQUENCY = 2000
+EPOCHS = 100000
+TARGET_UPDATE_FREQUENCY = 50
 STEPS = 4
-DECAY_RATE_CHANGE = 0.01
+DECAY_RATE_CHANGE = 5
+MAX_EPSILON = .95
 
 # Memory constants
 MEMORY_SIZE = 200
@@ -48,8 +49,8 @@ class TrainingProcess:
             target_network,
             optimizer,
             device,
+            epoch,
             metrics,
-            network,
             data_updates,
             samples,
             memory_size,
@@ -63,12 +64,12 @@ class TrainingProcess:
         self.target_network = target_network
         self.device = device
         self.metrics = metrics
-        self.network = network
         self.data_updates = data_updates
         self.samples = samples
         self.memory_size = memory_size
         self.sample_request_event = sample_request_event
         self.loss = loss
+        self.epoch = epoch
         self.terminated = terminated
         self.model_path = model_path
         self.save_path = save_path
@@ -112,6 +113,7 @@ class TrainingProcess:
         self.load_model()
 
         for epoch in range(epochs):
+            self.epoch.value = epoch
             self.sample_request_event.set()
             if self.samples.poll(timeout=999):
                 self.sample_request_event.clear()
@@ -122,6 +124,7 @@ class TrainingProcess:
                 if epoch % TARGET_UPDATE_FREQUENCY == 0:
                     self.target_network.load_state_dict(self.predict_network.state_dict())
                     print(
+                        f'UPDATE [{epoch // TARGET_UPDATE_FREQUENCY}] '
                         f'Loss: {loss} '
                         f'Average rewards: {self.metrics[0]} '
                         f'Average episode length: {self.metrics[1]}')
@@ -131,10 +134,6 @@ class TrainingProcess:
 
                 self.data_updates.send({'idxs': tree_idxs, 'priorities': td_error.detach()})
                 self.loss.send(loss.detach().item())
-                self.network.send({
-                    'epoch': epoch,
-                    'network': self.predict_network.state_dict()
-                })
         self.terminated.value = True
         self.save_model()
 
@@ -182,7 +181,7 @@ class MemoryManagmentProcess(Process):
         self.memory = PrioritizedReplayBuffer(
             buffer_size=MEMORY_SIZE,
             state_dim=INPUT_SIZE,
-            action_dim=(1),
+            action_dim=1,
             alpha=ALPHA,
             beta=BETA
         )
@@ -198,8 +197,8 @@ class MemoryManagmentProcess(Process):
     def update_data(self):
         if self.data.poll():
             data = self.data.recv()
-            self.memory.add(data)
-            self.metrics.push_reward(data[3], data[4])
+            self.memory.add(data[1])
+            self.metrics.push_reward(data[0], data[1][3], data[1][4])
 
     def send_sample(self):
         if self.sample_request_event.is_set():
@@ -210,8 +209,8 @@ class MemoryManagmentProcess(Process):
             self.metrics.push_loss(self.loss.recv())
 
         self.metrics.calculate()
-        self.metrics_summary[0] = self.metrics.average_rewards
-        self.metrics_summary[1] = self.metrics.average_episode_length
+        self.metrics_summary[0] = self.metrics.average_rewards(TARGET_UPDATE_FREQUENCY)
+        self.metrics_summary[1] = self.metrics.average_episode_length(TARGET_UPDATE_FREQUENCY)
         self.metrics_summary[2] = self.metrics.highest_reward
         self.metrics_summary[3] = self.metrics.longest_episode
 
@@ -242,23 +241,25 @@ class MemoryManagmentProcess(Process):
 class DataCollectionProcess(Process):
     def __init__(
             self,
-            network,
+            process_id,
+            predict_network,
             data,
+            epoch,
             device,
             data_collection_lock,
             terminated
     ):
         Process.__init__(self)
-        self.predict_network = None
-        self.network = network
+        self.process_id = process_id
+        self.predict_network = predict_network
         self.data = data
         self.terminated = terminated
+        self.epoch = epoch
         self.device = device
         self.data_collection_lock = data_collection_lock
         self.game = None
 
     def init(self):
-        self.predict_network = DQN().to(self.device)
         self.game = GameEnviroment(size=SCREEN_SIZE, fps=FPS, fps_limit=False, training_mode=True)
         self.game.execute()
 
@@ -274,7 +275,7 @@ class DataCollectionProcess(Process):
             return torch.argmax(action).to(torch.int)
 
     def do_one_step(self, epsilon):
-        state = self.preprocess_state(self.game.get_state()).to(torch.float32).to(self.device)
+        state = self._preprocess_state(self.game.get_state()).to(torch.float32).to(self.device)
 
         action = self.epsilon_greedy_policy(epsilon, state)
 
@@ -282,12 +283,12 @@ class DataCollectionProcess(Process):
 
         reward = torch.tensor(reward)
         terminated = torch.tensor(terminated)
-        next_state = self.preprocess_state(next_state)
+        next_state = self._preprocess_state(next_state)
 
         data = (state, next_state, action, reward, terminated)
         return data
 
-    def preprocess_state(self, state):
+    def _preprocess_state(self, state):
         with torch.no_grad():
             state = F.to_pil_image(state)
             state = F.to_grayscale(state)
@@ -296,15 +297,13 @@ class DataCollectionProcess(Process):
             state = state.squeeze().reshape((1, *INPUT_SIZE))
         return state
 
+    def _get_epsilon(self, epoch):
+        return min(1 - 1 * ((1 - float(epoch) / EPOCHS) ** DECAY_RATE_CHANGE), MAX_EPSILON)
+
     def collect_data(self, steps):
-        self.data_collection_lock.acquire()
-        if self.network.poll(timeout=999):
-            network = self.network.recv()
-            self.data_collection_lock.release()
-            self.predict_network.load_state_dict(network['network'])
-            for step in range(steps):
-                epsilon = 1 * ((1 - float(network['epoch']) / EPOCHS) ** DECAY_RATE_CHANGE)
-                self.data.send(self.do_one_step(epsilon))
+        for step in range(steps):
+            epsilon = self._get_epsilon(self.epoch.value)
+            self.data.send((self.process_id, self.do_one_step(epsilon)))
 
     def run(self):
         self.init()
@@ -315,7 +314,7 @@ class DataCollectionProcess(Process):
                     break
 
                 self.collect_data(STEPS)
-        except:
+        except Exception:
             traceback.print_exc()
 
 
@@ -327,9 +326,9 @@ def main():
     target_network = DQN().to(device)
     target_network.load_state_dict(predict_network.state_dict())
     optimizer = torch.optim.AdamW(predict_network.parameters(), lr=LR, amsgrad=True)
+    predict_network.share_memory()
 
     metrics = Array('d', 4)
-    network_recv, network_sender = Pipe()
     data_recv, data_sender = Pipe()
     data_updates_recv, data_updated_sender = Pipe()
     samples_recv, samples_sender = Pipe()
@@ -337,19 +336,15 @@ def main():
     sample_request_event = Event()
     data_collection_lock = RLock()
     terminated = Value('b', False)
+    epoch = Value('i', 0)
     memory_size = Value('i', 0)
-
-    network_sender.send({
-        'epoch': 0,
-        'network': predict_network.state_dict()
-    })
 
     training_process = TrainingProcess(
         predict_network=predict_network,
         target_network=target_network,
         optimizer=optimizer,
         device=device,
-        network=network_sender,
+        epoch=epoch,
         data_updates=data_updated_sender,
         samples=samples_recv,
         memory_size=memory_size,
@@ -361,12 +356,14 @@ def main():
     )
 
     data_collection_processes = [DataCollectionProcess(
-        network=network_recv,
+        process_id=f'Game-{i}',
+        predict_network=predict_network,
         data=data_sender,
         device=device,
+        epoch=epoch,
         data_collection_lock=data_collection_lock,
         terminated=terminated
-    ) for _ in range(2)] # torch.multiprocessing.cpu_count()
+    ) for i in range(2)]  # torch.multiprocessing.cpu_count()
 
     memory_managment_process = MemoryManagmentProcess(
         data=data_recv,
