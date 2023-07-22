@@ -25,14 +25,15 @@ import os
 STATE_DIM = (1, SCREEN_SIZE[0], SCREEN_SIZE[1])
 
 # Training constants
-LR = 1e-4
+LR = 2.5e-4
 GAMMA = 0.99
 BATCH_SIZE = 8
 EPOCHS = 100000
 TARGET_UPDATE_FREQUENCY = 50
 STEPS = 4
 DECAY_RATE_CHANGE = 5
-MAX_EPSILON = .95
+MAX_EPSILON = .90
+MIN_EPSILON = .1
 
 # Memory constants
 MEMORY_SIZE = 200
@@ -94,8 +95,8 @@ class TrainingProcess:
             next_state_q_values = self.target_network(next_states / 255).max(axis=1)[0]
         target_q_values = rewards + (1 - terminated) * gamma * next_state_q_values
 
-        huber = nn.SmoothL1Loss(reduction='none')
-        loss = huber(q_values, target_q_values.unsqueeze(1))
+        loss_fn = nn.MSELoss(reduction='none')
+        loss = loss_fn(q_values, target_q_values.unsqueeze(1))
         loss = torch.mean(loss * weights)
         td_error = torch.abs(q_values.squeeze(1) - target_q_values)
 
@@ -107,10 +108,10 @@ class TrainingProcess:
         return tree_idxs, td_error, loss
 
     def training_loop(self, epochs, batch_size, gamma):
+        self.load_model()
+
         while int(self.memory_size.value) < batch_size:
             pass
-
-        self.load_model()
 
         for epoch in range(epochs):
             self.epoch.value = epoch
@@ -264,7 +265,7 @@ class DataCollectionProcess(Process):
         self.game.execute()
 
     def epsilon_greedy_policy(self, epsilon, state):
-        if np.random.rand() < epsilon:
+        if np.random.rand() > epsilon:
             return torch.tensor(np.random.choice(possible_actions))
         else:
             self.predict_network.eval()
@@ -298,7 +299,7 @@ class DataCollectionProcess(Process):
         return state
 
     def _get_epsilon(self, epoch):
-        return min(1 - 1 * ((1 - float(epoch) / EPOCHS) ** DECAY_RATE_CHANGE), MAX_EPSILON)
+        return max(MIN_EPSILON, min(1 - 1 * ((1 - float(epoch) / EPOCHS) ** DECAY_RATE_CHANGE), MAX_EPSILON))
 
     def collect_data(self, steps):
         for step in range(steps):
@@ -325,7 +326,7 @@ def main():
     predict_network = DQN().to(device)
     target_network = DQN().to(device)
     target_network.load_state_dict(predict_network.state_dict())
-    optimizer = torch.optim.AdamW(predict_network.parameters(), lr=LR, amsgrad=True)
+    optimizer = torch.optim.Adam(predict_network.parameters(), lr=LR)
     predict_network.share_memory()
 
     metrics = Array('d', 4)
